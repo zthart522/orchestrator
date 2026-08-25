@@ -612,7 +612,7 @@ class SolvationFreeEnergy(TargetProperty):
                 f'{self.min_dir}/minimized.data'
             ], 
             scheduler, 
-            path_type + f'/{iter_num}/equil', 
+            path_type + f'/{iter_num}/equil',
             "equil",
             random_seed_use
         )
