@@ -52,14 +52,37 @@ class SlurmScheduler(HPCScheduler, ABC):
         :rtype: int
         :raises ValueError: If job ID format is invalid
         """
+        # split_output = str_output.split()
+        # # check if expected output format is present
+        # if split_output[0] == 'Submitted' and
+        # split_output[2] == 'job':
+        #    # output from sbatch: "Submitted batch job 12345"
+        #    return int(split_output[3])
+        # elif split_output[0] == 'srun:' and split_output[1] == 'job':
+        #    # output from srun: "srun: job 12345 ..."
+        #    return int(split_output[2])
+        # else:
+        #    raise ValueError(
+        #        f'Output string is unexpected format: {str_output.strip()}')
+
+        # Reformatted so that it looks for correct phrase
         split_output = str_output.split()
-        # check if expected output format is present
-        if split_output[0] == 'Submitted' and split_output[2] == 'job':
-            # output from sbatch: "Submitted batch job 12345"
-            return int(split_output[3])
-        elif split_output[0] == 'srun:' and split_output[1] == 'job':
-            # output from srun: "srun: job 12345 ..."
-            return int(split_output[2])
+        # check for 'Submitted batch job #' or 'srun: job #'
+        for i in range(len(split_output) - 3):
+            # check for 'Submitted batch job #' format
+            if (split_output[i] == 'Submitted'
+                    and split_output[i + 1] == 'batch'
+                    and split_output[i + 2] == 'job'
+                    and split_output[i + 3].isdigit()):
+                return int(split_output[i + 3])
+            # check for 'srun: job #' format
+            if (split_output[i] == 'srun:' and split_output[i + 1] == 'job'
+                    and split_output[i + 2].isdigit()):
+                return int(split_output[i + 2])
+        # check last split for 'srun: job #'
+        if (split_output[i] == 'srun:' and split_output[i + 1] == 'job'
+                and split_output[i + 2].isdigit()):
+            return int(split_output[i + 2])
         else:
             raise ValueError(
                 f'Output string is unexpected format: {str_output.strip()}')
@@ -100,43 +123,92 @@ class SlurmScheduler(HPCScheduler, ABC):
 
     def check_completed_job_status(self, slurm_id: int) -> str:
         """
-        Use scontrol to extract the status of a completed job
+        Use sacct to extract the status of a completed job, including individul
+        job steps.
 
         :param slurm_id: job ID of the job to query
         :type slurm_id: int
         :returns: job status
         :rtype: str
         """
-        if self.remote_machine is None:
-            control_command = f'scontrol show job {slurm_id}'
-        else:
-            control_command = (f"ssh {self.remote_machine} 'source /etc/"
-                               f"profile; scontrol show job {slurm_id}'")
+        sacct_command = f"sacct -j {slurm_id} -nPo JobID,State,ExitCode"
+        if self.remote_machine is not None:
+            sacct_command = (f"ssh {self.remote_machine} "
+                             f"'source /etc/profile; {sacct_command}'")
 
-        control_output = sp.run(control_command,
-                                capture_output=True,
-                                shell=True,
-                                encoding='UTF-8')
-        if control_output.returncode != 0:
+        sacct_output = sp.run(sacct_command,
+                              capture_output=True,
+                              shell=True,
+                              encoding='UTF-8')
+
+        if sacct_output.returncode != 0:
             # can't find job
             if self.job_done_file_present(slurm_id):
-                self.logger.info('scontrol query return code nonzero, but '
+                self.logger.info('sacct query returned nothing, but '
                                  'job_done file present')
-                state = 'done'
+                return 'done'
             else:
-                state = 'done_unknown'
-        else:
-            # will get full report, JobState at 10 after =
-            job_state = control_output.stdout.split()[10].split('=')[1]
-            if job_state == 'COMPLETED':
-                state = 'done'
-            elif job_state == 'TIMEOUT':
-                state = 'done_timeout'
-            elif job_state == 'CANCELLED':
-                state = 'done_cancelled'
-            else:
-                state = 'done_other'
-        return state
+                return 'done_unknown'
+
+        for line in sacct_output.stdout.strip().split('\n'):
+            parts = line.split('|')
+            if len(parts) < 3:
+                continue
+            job_id, state, exit_code = parts[0], parts[1], parts[2]
+            base_state = state.split()[
+                0]  # e.g. "CANCELLED by 12345" -> "CANCELLED"
+            exit_status = exit_code.split(':')[0] if exit_code else '0'
+
+            if base_state == 'FAILED' or exit_status != '0':
+                self.logger.warning(
+                    f"sacct: step {job_id} reported state={state}, "
+                    f"exit_code={exit_code}")
+                return 'done_failed'
+            elif base_state == 'TIMEOUT':
+                return 'done_timeout'
+            elif base_state == 'CANCELLED':
+                return 'done_failed'
+
+        return 'done'
+
+        # """
+        # Use scontrol to extract the status of a completed job
+
+        # :param slurm_id: job ID of the job to query
+        # :type slurm_id: int
+        # :returns: job status
+        # :rtype: str
+        # """
+        # if self.remote_machine is None:
+        #     control_command = f'scontrol show job {slurm_id}'
+        # else:
+        #     control_command = (f"ssh {self.remote_machine} 'source /etc/"
+        #                     f"profile; scontrol show job {slurm_id}'")
+
+        # control_output = sp.run(control_command,
+        #                         capture_output=True,
+        #                         shell=True,
+        #                         encoding='UTF-8')
+        # if control_output.returncode != 0:
+        #     # can't find job
+        #     if self.job_done_file_present(slurm_id):
+        #         self.logger.info('scontrol query return code nonzero, but '
+        #                         'job_done file present')
+        #         state = 'done'
+        #     else:
+        #         state = 'done_unknown'
+        # else:
+        #     # will get full report, JobState at 10 after =
+        #     job_state = control_output.stdout.split()[10].split('=')[1]
+        #     if job_state == 'COMPLETED':
+        #         state = 'done'
+        #     elif job_state == 'TIMEOUT':
+        #         state = 'done_timeout'
+        #     elif job_state == 'CANCELLED':
+        #         state = 'done_cancelled'
+        #     else:
+        #         state = 'done_other'
+        # return state
 
     def _build_status_query_command(self, job_ids: list[int]) -> str:
         """

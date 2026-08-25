@@ -3,14 +3,17 @@
         "target_property_type": "MeltingPoint",
         "target_property_args": {
             "simulator_type": "LAMMPS",
-            "simulator_path": "<LAMMPS_PATH>",
+            "simulator_path": "/work2/11346/zthart/stampede3/sw/fuse-lammps/build/lmp",
             "input_template": {
                 "NPT": "./templates/npt.in",
                 "NPH": "./templates/nph.in"
             },
             "job_details": {
-                "nodes":<NODES>,
-                "tasks":<TASKS>
+                "nodes":1,
+                "tasks":1,
+                "extra_args":{
+                    "preamble": "module load gcc/15.1.0\n module load openmpi/5.0.8\n module load hdf5/1.10.11"
+                }
             },
             "npt_job_details": {
                 "walltime": 7
@@ -65,11 +68,11 @@
         }
     },
     "scheduler": {
-        "scheduler_type": "<ASYNCH_SCHEDULER>",
+        "scheduler_type": "SLURM",
         "scheduler_args": {
             "root_directory": "./test_copper_standardpress",
-            "queue": "<HPC_QUEUE>",
-            "account": "<HPC_ACCOUNT>",
+            "queue": "skx-dev",
+            "account": "TG-CHM250015",
             "wait_freq": 120
         }
     },

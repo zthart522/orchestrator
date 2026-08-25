@@ -83,6 +83,13 @@ class TargetPropertyBuilder(ModuleBuilder):
                         'CalculateLammpsThermo', CalculateLammpsThermo)
                 except ModuleAlreadyInFactoryError:
                     pass
+            case 'SolvationFreeEnergy':
+                from .solvation_free_energy import SolvationFreeEnergy
+                try:
+                    target_property_factory.add_new_module(
+                        'SolvationFreeEnergy', SolvationFreeEnergy)
+                except ModuleAlreadyInFactoryError:
+                    pass
 
         target_property_constructor = self.factory.select_module(
             target_property_type)
