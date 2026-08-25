@@ -324,13 +324,13 @@ class SolvationFreeEnergy(TargetProperty):
         # Make list that includes both solute and solvents
         solute_params = solvation_params.get('solute')
         solvent_params = solvation_params.get('solvent')
-        self.logger.info(f'\tcreating list of molecules in system')
+        self.logger.info('\tcreating list of molecules in system')
         solute_entry = {
             **solute_params, 'num_molecs': solute_params.get('num_molecs', 1)
         }
         molec_list = [solute_entry] + solvent_params
 
-        self.logger.info(f'\twriting packmol input file...')
+        self.logger.info('\twriting packmol input file...')
         with open(pack_inp, 'w') as f:
             f.write(f'tolerance {pack_tol}\noutput system_packed.pdb\n'
                     'filetype pdb\n\n')
@@ -342,7 +342,7 @@ class SolvationFreeEnergy(TargetProperty):
                         f'  inside cube 0.0 0.0 0.0 {pack_boxlen}\n'
                         f'end structure\n')
 
-        self.logger.info(f'\tfinished writing packmol input script,'
+        self.logger.info('\tfinished writing packmol input script,'
                          'running packmol...')
 
         with open(pack_inp) as stdin_file:
@@ -364,14 +364,13 @@ class SolvationFreeEnergy(TargetProperty):
                     f"Packmol failed (return code {result.returncode});"
                     "see log for details")
 
-        self.logger.info(f'Finished packing system!')
+        self.logger.info('Finished packing system!')
 
         # --- Packing Complete!! ---
 
         # --- Run moltemplate now ---
-        self.logger.info(
-            f'\nUsing moltemplate to generate parameter file & packed_system.data'
-        )
+        self.logger.info('\nUsing moltemplate to generate parameter file'
+                         '& packed_system.data')
 
         # Check that moltemp executable exists & is executable
         moltemp_exe = executables.get('moltemp')
@@ -379,11 +378,10 @@ class SolvationFreeEnergy(TargetProperty):
             raise ValueError(
                 "moltemp_exe must be specified in solvation_params")
         if shutil.which(moltemp_exe) is None:
-            raise ValueError(
-                f"moltemp executable not found or not executable: {moltemp_exe}"
-            )
+            raise ValueError("moltemp executable not found or not executable: "
+                             f"{moltemp_exe}")
 
-        self.logger.info(f'\tgathering .lt files')
+        self.logger.info('\tgathering .lt files')
         # Copy over lt files into , saving solvent as solv{i}.{name of lt}.lt
         # and solute as solu.{name of lt}, checking that each is found
         lt_header = []
@@ -407,7 +405,7 @@ class SolvationFreeEnergy(TargetProperty):
             lt_header.append(f'import "{lt_name}"\n')
             lt_body.append(f'{name} = new {name}[{num_molecs}]\n')
 
-        self.logger.info(f'\twriting combined system_packed.lt file')
+        self.logger.info('\twriting combined system_packed.lt file')
         with open(f'{self.pack_dir}/system_packed.lt', "w") as f:
             f.writelines(lt_header)
             f.write('\n')
@@ -419,7 +417,7 @@ class SolvationFreeEnergy(TargetProperty):
             f.write(f'  0 {pack_boxlen} zlo zhi\n')
             f.write('}\n\n')
 
-        # Get atom style, so that moltemplate will write the output file correctly
+        # Get atom style so moltemplate will write the output file correctly
         atom_style = sim_params.get('atom_style')
         cmd = [
             moltemp_exe, "-pdb", "system_packed.pdb", "-atomstyle", atom_style,
@@ -461,9 +459,8 @@ class SolvationFreeEnergy(TargetProperty):
             text=True,
         )
         if result.returncode != 0:
-            self.logger.error(
-                f"Moltemplate cleanup failed with return code {result.returncode}"
-            )
+            self.logger.error("Moltemplate cleanup failed with return code "
+                              f"{result.returncode}")
             self.logger.error(result.stdout)
             self.logger.error(result.stderr)
             raise RuntimeError(
@@ -482,11 +479,10 @@ class SolvationFreeEnergy(TargetProperty):
             if style in sim_params.keys(
             ) and sim_params[style] != init_args[style]:
                 self.logger.warning(
-                    f"\ndifference found in passed sim_param and .lt file for {style} "
+                    f"\ndifference in sim_params and .lt file for {style} "
                     f"\npassed style: {sim_params[style]},"
                     f".in.init style: {init_args[style]}"
-                    f"\ntaking .in.init value instead? -> {self.override_with_init}"
-                )
+                    f"\nuse .in.init value -> {self.override_with_init}")
                 if self.override_with_init:
                     sim_params[style] = init_args[style]
 
@@ -494,17 +490,16 @@ class SolvationFreeEnergy(TargetProperty):
         for arg in init_ps_args.keys():
             if arg in ps_args.keys() and ps_args[arg] != init_ps_args[arg]:
                 self.logger.warning(
-                f"\ndifference found in passed pair_style argument {arg} " \
-                f"\npassed style: {ps_args[arg]}, .in.init style: {init_ps_args[arg]}" \
-                f"\ntaking .in.init value instead? -> {self.override_with_init}" \
-                )
+                    f"\ndifference found in passed pair_style argument {arg} "
+                    f"\npassed style: {ps_args[arg]}, .in.init style: "
+                    f"{init_ps_args[arg]}"
+                    f"\nuse .in.init value -> {self.override_with_init}")
                 if self.override_with_init:
                     sim_params["pair_style_args"][arg] = init_ps_args[arg]
 
         # Read coefficients writeen by moltemplate
-        self.logger.info(
-            f'\tparsing pair/bond/angle/dihedral/improper coefficients from moltemplate .in.settings'
-        )
+        self.logger.info('\tparsing pair/bond/angle/dihedral/improper'
+                         'coefficients from moltemplate .in.settings')
         pack_settings_path = f'{self.pack_dir}/system_packed.in.settings'
         pair_coeffs, other_coeffs = self._parse_settings_file(
             pack_settings_path)
@@ -512,17 +507,22 @@ class SolvationFreeEnergy(TargetProperty):
 
         # Parse solute vs. solvent types and charges
         self.logger.info(
-            f'\tparsing atom types and charges from system_packed.data')
-        solvent_types, solute_types, all_charges = self._parse_types_and_charges_from_data(
-            f'{self.pack_dir}/system_packed.data', 1, atom_style, self.logger)
+            '\tparsing atom types and charges from system_packed.data')
+        solvent_types, solute_types, all_charges = \
+            self._parse_types_and_charges_from_data(
+                f'{self.pack_dir}/system_packed.data',
+                1,
+                atom_style,
+                self.logger
+            )
         charge_file = f'{self.pack_dir}/system_packed.in.charges'
         if isfile(charge_file):
             self.logger.info(
                 f'\tfound {charge_file}, overriding charges from Data Atoms')
             _, chg_file_charges = self._parse_charges_file(charge_file)
             self.logger.info(
-                f'\t\t{len(chg_file_charges)} charge override(s) parsed: {chg_file_charges}'
-            )
+                f'\t\t{len(chg_file_charges)} charge override(s) parsed: '
+                f'{chg_file_charges}')
             all_charges = {**all_charges, **chg_file_charges}
         else:
             self.logger.info(
@@ -549,10 +549,12 @@ class SolvationFreeEnergy(TargetProperty):
         if has_charges and not charged_solute:
             self.logger.warning(
                 '\tSystem has charges, but the solute itself appears '
-                'uncharged. TI_ELEC leg may be unnecessary — check solute_types '
+                'uncharged. TI_ELEC leg may be unnecessary — '
+                'check solute_types '
                 f'{sorted(solute_types)} against all_charges.')
 
-        # Prepare pair_style_args_str & soft_pair_style_args from pair_style_args,
+        # Prepare pair_style_args_str & soft_pair_style_args
+        # from pair_style_args,
         # then add them to sim_params
         main_pair_style = sim_params.get('pair_style')
         pair_style_args = sim_params.get('pair_style_args')
@@ -575,7 +577,7 @@ class SolvationFreeEnergy(TargetProperty):
         self._write_charge_file(sorted(set(solute_types + solvent_types)),
                                 all_charges, main_charge_file)
 
-        self.logger.info(f'\tbuilding vdW soft-core modification lines')
+        self.logger.info('\tbuilding vdW soft-core modification lines')
         vdw_params = self._build_vdw_modification_lines(
             solute_types, solvent_types, soft_pair_style)
         sim_params = {**sim_params, **vdw_params}
@@ -585,7 +587,7 @@ class SolvationFreeEnergy(TargetProperty):
         # --- Start of simulation procedures ---
 
         # --- Minimization procedure!! ---
-        self.logger.info(f'\nAttempting to run minimization job')
+        self.logger.info('\nAttempting to run minimization job')
         min_job = self._conduct_sim(sim_params, [
             main_settings_file, main_charge_file,
             f'{self.pack_dir}/system_packed.data'
@@ -604,18 +606,11 @@ class SolvationFreeEnergy(TargetProperty):
                 'no charges in system, kspace_style has been changed to none.')
 
         self.logger.info('\nAttempting to run equilibration job')
-        equil_job = self._conduct_sim(
-            sim_params, 
-            [
-                main_settings_file, 
-                main_charge_file,
-                f'{self.min_dir}/minimized.data'
-            ], 
-            scheduler, 
-            path_type + f'/{iter_num}/equil',
-            "equil",
-            random_seed_use
-        )
+        equil_job = self._conduct_sim(sim_params, [
+            main_settings_file, main_charge_file,
+            f'{self.min_dir}/minimized.data'
+        ], scheduler, path_type + f'/{iter_num}/equil', "equil",
+                                      random_seed_use)  # noqa: E126
         scheduler.block_until_completed(equil_job)
         self.equil_dir = os.path.realpath(scheduler.get_job_path(equil_job))
 

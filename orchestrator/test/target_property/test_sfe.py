@@ -2,9 +2,8 @@ import json
 from orchestrator.target_property.factory import target_property_builder
 from orchestrator.scheduler.factory import scheduler_builder
 
-with open(
-        './test/target_property/test_inputs/'
-        'water_ethanol_solvation_free_energy_input.json', 'r') as f:
+with open('./test_inputs/'
+          'water_ethanol_solvation_free_energy_input.json', 'r') as f:
     config = json.load(f)
 
 tp_config = config['target_property']
