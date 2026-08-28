@@ -5,27 +5,37 @@
             "simulator_type": "LAMMPS",
             "simulator_path": "/work2/11346/zthart/stampede3/sw/fuse-lammps/build/lmp",
             "input_template": {
-                "min": "/scratch/11346/zthart/fuse_project/orchestrator_templates/minimization_template.in",
-                "equil": "/scratch/11346/zthart/fuse_project/orchestrator_templates/equilibrium_template.in",
-                "ti_elec": "/scratch/11346/zthart/fuse_project/orchestrator_templates/ti_elec_template.in",
-                "ti_vdw": "/scratch/11346/zthart/fuse_project/orchestrator_templates/ti_vdw_template.in",
-                "ti_vacuum": "/scratch/11346/zthart/fuse_project/orchestrator_templates/ti_vacuum_template.in"
+                "min": "/scratch/11346/zthart/fuse_project/orchestrator/orchestrator/orchestrator/test/target_property/ti_defaults/minimization_template.in",
+                "equil": "/scratch/11346/zthart/fuse_project/orchestrator/orchestrator/orchestrator/test/target_property/ti_defaults/equilibrium_template.in",
+                "ti_elec": "/scratch/11346/zthart/fuse_project/orchestrator/orchestrator/orchestrator/test/target_property/ti_defaults/ti_elec_template.in",
+                "ti_vdw": "/scratch/11346/zthart/fuse_project/orchestrator/orchestrator/orchestrator/test/target_property/ti_defaults/ti_vdw_template.in",
+                "ti_vacuum": "/scratch/11346/zthart/fuse_project/orchestrator/orchestrator/orchestrator/test/target_property/ti_defaults/ti_vacuum_template.in"
             },
             "job_details": {
                 "nodes":1,
-                "tasks":1,
+                "tasks":112,
                 "extra_args":{
-                    "preamble": "module load gcc/15.1.0\nmodule load openmpi/5.0.8\nmodule load hdf5/1.10.11"
+                    "preamble": "module purge\nmodule load gcc/15.1.0\nmodule load openmpi/5.0.8\nmodule load hdf5/1.10.11\n\nexport FI_PROVIDER=tcp\nexport OMP_NUM_THREADS=4"
+                },
+                "custom_preamble": "ibrun"
+            },
+            "ti_job_details":
+            {
+                "min":{
+                    "walltime": 120
+                },
+                "equil":{
+                    "walltime": 120
+                },
+                "ti_elec":{
+                    "walltime": 120
+                },
+                "ti_vdw":{
+                    "walltime": 120
+                },
+                "ti_vacuum":{
+                    "walltime": 120
                 }
-            },
-            "min_job_details": {
-                "walltime": 7
-            },
-            "equil_job_details": {
-                "walltime": 20
-            },
-            "ti_job_details": {
-                "walltime": 20
             }
         },
         "calculate_property_args": {
@@ -48,51 +58,57 @@
                     "inner": "none",
                     "outer": "none"
                 },
-                "pair_modify": "mix arithmetic",
+                "pair_modify": "mix geometric",
                 "special_bonds": "lj/coul 0.0 0.0 0.5",
                 "bond_style": "harmonic",
                 "angle_style": "harmonic",
                 "dihedral_style": "opls",
                 "kspace_style": "pppm 1.0e-4",
+                "kspace_modify": "none",
                 "improper_style": "cvff",
                 "temp": 298.0,
                 "press": 1.0,
                 "temp_damp": 100.0,
                 "press_damp": 250.0,
-                "timestep": 0.2,
-                "equil_steps": 1000,
-                "ti_steps": 5000
+                "timestep": 0.5,
+                "equil_steps": 250000,
+                "ti_steps": 250000
             },
             "solvation_params": {
                 "free_energy": "gibbs",
                 "pack_tol": 2.0,
-                "pack_boxlen": 40.0,
+                "pack_boxlen": 45.0,
                 "solute": {
-                    "class": "WATER",
-                    "pdb": "/scratch/11346/zthart/fuse_project/fuse/pdb_structures/molecules/water.pdb",
-                    "lt": "/scratch/11346/zthart/fuse_project/fuse/lt_force-fields/water_SPC-Fw.lt"
+                    "class": "ethanol",
+                    "pdb": "/scratch/11346/zthart/fuse_project/fuse/pdb_structures/molecules/ethanol.pdb",
+                    "lt": "/scratch/11346/zthart/fuse_project/fuse/lt_force-fields/ethanol_OPLS-AA.lt"
                 },
                 "solvent": [
                     {
-                        "class": "ethanol",
-                        "num_molecs": 200,
-                        "pdb": "/scratch/11346/zthart/fuse_project/fuse/pdb_structures/molecules/ethanol.pdb",
-                        "lt": "/scratch/11346/zthart/fuse_project/fuse/lt_force-fields/ethanol_OPLS-AA.lt"
+                        "class": "WATER",
+                        "num_molecs": 1500,
+                        "pdb": "/scratch/11346/zthart/fuse_project/fuse/pdb_structures/molecules/water.pdb",
+                        "lt": "/scratch/11346/zthart/fuse_project/fuse/lt_force-fields/water_SPC-Fw.lt"
                     }
                 ],
-                "lambda_values": 3,
-                "lambda_diff": 0.002
+                "lambda_values": [0.0, 0.02, 0.05, 0.07, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00],
+                "lambda_diff": 0.002,
+                "max_lambdas": 100,
+                "equil_frac": 0.30,
+                "tol": -1.0
             },
-            "random_seed_use": false
+            "random_seed_use": false,
+            "max_jobs": 20,
+            "user": "zthart"
         }
     },
     "scheduler": {
         "scheduler_type": "SLURM",
         "scheduler_args": {
             "root_directory": "./01_sfe_root",
-            "queue": "skx-dev",
+            "queue": "spr",
             "account": "TG-CHM250015",
-            "wait_freq": 20
+            "wait_freq": 120
         }
     },
     "storage": {

@@ -1,0 +1,75 @@
+
+##############################################
+###              Variables               ###
+##############################################
+
+variable       T               equal      {{ temp }}
+variable       T_damp          equal      {{ temp_damp }}
+variable       P               equal      {{ press }}
+variable       P_damp          equal      {{ press_damp }}
+variable       seed            equal      {{ random_seed }}
+
+##############################################
+###           General Settings             ###
+##############################################
+
+units           {{ units }}
+atom_style      {{ atom_style }}
+boundary        p p p
+kspace_style    {{ kspace_style }}
+neighbor        2.0 bin
+neigh_modify    delay 0 every 1 check yes
+
+##############################################
+###              Read Data                 ###
+##############################################
+
+read_data       minimized.data
+velocity        all create ${T} ${seed} mom yes rot yes dist gaussian
+
+##############################################
+###           Model Definition             ###
+##############################################
+
+pair_style      {{ pair_style }} {{ pair_style_args_str }}
+pair_modify     {{ pair_modify }}
+bond_style      {{ bond_style }}
+angle_style     {{ angle_style }}
+dihedral_style  {{ dihedral_style }}
+improper_style  {{ improper_style }}
+{% if special_bonds != 'none' %}
+special_bonds   {{ special_bonds }}
+{% endif %}
+
+include         system_packed.in.settings
+include         system_packed.in.charges
+
+##############################################
+###       Dynamics / Minimization        ###
+##############################################
+
+fix             1 all npt temp ${T} ${T} ${T_damp} iso ${P} ${P} ${P_damp}
+thermo          100
+thermo_style    custom step temp etotal econserve ke pe ebond eangle edihed press density vol
+dump            1 all custom 1000 traj.lammpstrj id type xu yu zu
+dump_modify     1 sort id
+
+variable        xdim equal lx
+variable        ydim equal ly
+variable        zdim equal lz
+fix             boxlens all ave/time 1 {{ equil_steps // 2 }} {{ equil_steps // 2 }} v_xdim v_ydim v_zdim
+
+timestep        {{ timestep }}
+run             {{ equil_steps }}
+
+variable        avg_xdim equal f_boxlens[1]
+variable        avg_ydim equal f_boxlens[2]
+variable        avg_zdim equal f_boxlens[3]
+
+change_box      all x final 0.0 ${avg_xdim} y final 0.0 ${avg_ydim} z final 0.0 ${avg_zdim} remap
+
+##############################################
+###            Save Datafile             ###
+##############################################
+
+write_data      npt_equil.data nocoeff

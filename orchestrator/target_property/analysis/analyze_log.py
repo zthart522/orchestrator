@@ -4,6 +4,8 @@ from io import StringIO
 import argparse
 from sklearn.cluster import DBSCAN
 from scipy.stats import linregress
+from typing import Optional
+import matplotlib.pyplot as plt
 
 
 class AnalyzeLammpsLog:
@@ -383,3 +385,105 @@ class AnalyzeLammpsLog:
             return True, ave_temp, std_temp, label_unique, ave_q, total_atoms
         else:
             return False, ave_temp, std_temp, label_unique, ave_q, total_atoms
+
+    @staticmethod
+    def plot_timeseries(
+        logfile: str,
+        quantity: str,
+        name: Optional[str] = None,
+        equil_frac: Optional[float] = None,
+        savepath: Optional[str] = None,
+        ax: Optional[plt.Axes] = None,
+        **kwargs,
+    ):
+        """
+        Reads lammps logfile, removes the first (equil_frac * len(timeseries))
+         of the timeseries and plots the remaining values.
+
+        :param logfile: Path to the LAMMPs log for reading
+        :type logfile: str
+        :param quantity: Name of quantity to plot, exactly as it appears
+        in the LAMMPs log
+        :type quantity: str
+        :param name: [Optional] name of the y-axis for plotting, if you want
+        something other than what appears in the LAMMPs log
+        :type: str
+        :param equil_frac: [Optional] Portion of the beginning of the timeseries to truncate
+        :type: str
+        :param savepath: [Optional] path to save the corresponding image to
+        :type: str
+        :param ax: [Optional] matplotlib Axes for adding plot to subplot figure
+        :type: plt.Axes
+        :param **kwargs: [Optional] other plot formatting inputs to plt.plot()
+        :param **kwargs: dict
+        """
+        created_fig = ax is None
+        if created_fig:
+            fig, ax = plt.subplots()
+
+        _, timeseries, _, _ = AnalyzeLammpsLog.extract_property(
+            [logfile, quantity])
+        _, steps, _, _ = AnalyzeLammpsLog.extract_property([logfile, "Step"])
+
+        if equil_frac is not None:
+            start = int(len(timeseries) * equil_frac)
+            timeseries = timeseries[start:]
+            steps = steps[start:]
+
+        ax.plot(steps, timeseries, **kwargs)
+        ax.set_xlabel("Step")
+        ax.set_ylabel(name if name is not None else quantity)
+
+        if savepath is not None and created_fig:
+            ax.figure.savefig(savepath, dpi=300, bbox_inches="tight")
+
+        return ax
+
+    @staticmethod
+    def plot_histogram(logfile: str,
+                       quantity: str,
+                       name: Optional[str] = None,
+                       equil_frac: Optional[float] = None,
+                       savepath: Optional[str] = None,
+                       ax: Optional[plt.Axes] = None,
+                       **kwargs):
+        """
+        Reads lammps logfile, truncates the first equil_frac of the
+        timeseries and plots a histogram of quantity.
+
+        :param logfile: Path to the LAMMPs log for reading
+        :type logfile: str
+        :param quantity: Name of quantity to plot, exactly as it appears
+            in the LAMMPs log
+        :type quantity: str
+        :param name: [Optional] label for the x-axis, if you want
+            something other than what appears in the LAMMPs log
+        :type name: str
+        :param equil_frac: [Optional] Portion of the beginning of the timeseries to truncate
+        :type equil_frac: float
+        :param savepath: [Optional] path to save the corresponding image to
+        :type savepath: str
+        :param ax: [Optional] matplotlib Axes for adding plot to subplot figure
+        :type ax: plt.Axes
+        :param kwargs: [Optional] other plot formatting inputs to ax.hist()
+        :type kwargs: dict
+        """
+        created_fig = ax is None
+        if created_fig:
+            fig, ax = plt.subplots()
+
+        _, timeseries, _, _ = AnalyzeLammpsLog.extract_property(
+            [logfile, quantity])
+
+        if equil_frac is not None:
+            start = int(len(timeseries) * equil_frac)
+            timeseries = timeseries[start:]
+
+        ax.hist(timeseries, **kwargs)
+        ax.set_xlabel(name if name is not None else quantity)
+        ax.set_ylabel("Count")
+
+        if savepath is not None and created_fig:
+            ax.figure.savefig(savepath, dpi=300, bbox_inches="tight")
+
+        return ax

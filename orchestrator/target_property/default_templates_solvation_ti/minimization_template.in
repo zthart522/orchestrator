@@ -1,0 +1,55 @@
+
+##############################################
+###           General Settings           ###
+##############################################
+
+units           {{ units }}
+atom_style      {{ atom_style }}
+boundary        p p p
+kspace_style    {{ kspace_style }}
+neighbor        2.0 bin
+neigh_modify    delay 0 every 1 check yes
+
+##############################################
+###              Read Data               ###
+##############################################
+
+read_data       system_packed.data
+
+##############################################
+###           Model Definition           ###
+##############################################
+
+pair_style      {{ pair_style }} {{ pair_style_args_str }}
+pair_modify     {{ pair_modify }}
+bond_style      {{ bond_style }}
+angle_style     {{ angle_style }}
+dihedral_style  {{ dihedral_style }}
+improper_style  {{ improper_style }}
+{% if special_bonds != 'none' %}
+special_bonds   {{ special_bonds }}
+{% endif %}
+
+include         system_packed.in.settings
+include         system_packed.in.charges
+
+thermo          100
+thermo_style    custom step temp etotal econserve ke pe ebond eangle edihed press density vol
+dump            1 all custom 1000 traj.lammpstrj id type xu yu zu
+dump_modify     1 sort id
+
+##############################################
+###       Dynamics / Minimization        ###
+##############################################
+
+min_style       cg
+minimize        1e-07 1e-09 1000 500000
+min_style       fire
+min_modify      dmax 0.01
+minimize        1e-07 1e-09 7000 500000
+
+##############################################
+###              Save Data               ###
+##############################################
+
+write_data   minimized.data nocoeff

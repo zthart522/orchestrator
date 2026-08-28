@@ -1,12 +1,13 @@
 import numpy as np
 # import yaml
+from time import sleep
 import subprocess
 import shutil
-# import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 import random
 # from datetime import datetime
 import os
-# from glob import glob
+from glob import glob
 from os.path import isfile  # split, getmtime
 from typing import Union, Optional, Any, Dict
 from ..simulator import simulator_builder
@@ -66,9 +67,7 @@ class SolvationFreeEnergy(TargetProperty):
         job_details: dict,
         input_template: dict,
         elements: list = [],
-        min_job_details: dict = [],
-        equil_job_details: dict = [],
-        ti_job_details: dict = [],
+        ti_job_details: Optional[Dict] = None,
         **kwargs: Any,
     ):
         """
@@ -88,14 +87,9 @@ class SolvationFreeEnergy(TargetProperty):
         :type input_template: dict
         :param job_details: optional parameters for running the job
         :type job_details: dict
-        :param min_job_details: optional parameters for running the packed
-        structure minimization job
-        :type min_job_details: dict
-        :param equil_job_details: optional parameters for running the
-        equilibration job
-        :type equil_job_details: dict
         :param ti_job_details: optional parameters for running the
         thermodynamic integration job
+        expected as dictionary with same keywords as input_template
         :type ti_job_details: dict
         """
 
@@ -119,6 +113,7 @@ class SolvationFreeEnergy(TargetProperty):
             "angle_style": "none",
             "dihedral_style": "none",
             "kspace_style": "pppm 1.0e-4",
+            "kspace_modify": "none",
             "improper_style": "none",
             "temp": 298.15,
             "press": 1.0,
@@ -136,7 +131,11 @@ class SolvationFreeEnergy(TargetProperty):
             "solute": "unknown",
             "solvent": ["unknown"],
             "lambda_values": 11,
-            "lambda_diff": 0.002
+            "lambda_diff": 0.002,
+            "equil_frac": 0.25,
+            "tol": 0.10,
+            "max_jobs": None,
+            "user": None
         }
 
         # Set default seed
@@ -144,33 +143,45 @@ class SolvationFreeEnergy(TargetProperty):
 
         # If differences are found in pair_style or pair_style_args,
         # should they be overwritten?
-        self.override_with_init = True
+        self.override_with_init = False
 
-        self.min_job_details = {**job_details, **min_job_details}
-        self.equil_job_details = {**job_details, **equil_job_details}
-        self.ti_job_details = {**job_details, **ti_job_details}
+        # Fill in defaults
+        self.ti_job_details = {}
+        if ti_job_details:
+            for k in ("min", "equil", "ti_elec", "ti_vdw", "ti_vacuum"):
+                v = ti_job_details.get(k)
+                if v is not None:
+                    self.ti_job_details[k] = {
+                        **job_details,
+                        **ti_job_details[k]
+                    }
+                else:
+                    self.ti_job_details[k] = dict(job_details)
 
         self.input_template = input_template
-
-        self.input_template_min = input_template['min']
-        self.input_template_equil = input_template['equil']
-        self.input_template_ti_elec = input_template['ti_elec']
-        self.input_template_ti_vdw = input_template['ti_vdw']
-        self.input_template_ti_vacuum = input_template['ti_vacuum']
 
         simulator_args = {'code_path': simulator_path, 'elements': elements}
         self.built_simulator = simulator_builder.build(simulator_type,
                                                        simulator_args)
 
         self.progress_flag = 'init'
-        self.current_state = {}
+        self.forcefield_path = None
+        self.current_state = None
+        self.analysis_dir = None
         self.pack_dir = None
-        self.min_dir = []
-        self.no_charge_dir = []
+        self.min_dir = None
+        self.equil_dir = None
+        self.no_charge_dir = None
+        self.completed_lambdas = {'ti_elec': [], 'ti_vdw': [], 'ti_vacuum': []}
+        self.logfiles = {'ti_elec': [], 'ti_vdw': [], 'ti_vacuum': []}
+        self.sim_runs = {
+            'min': [],
+            'equil': [],
+            'ti_elec': [],
+            'ti_vdw': [],
+            'ti_vacuum': []
+        }
 
-        self.elec_lambda_calcs = []
-        self.vdw_lambda_calcs = []
-        self.vacuum_lambda_calcs = []
         super().__init__(**kwargs)
 
     def checkpoint_property(self) -> None:
@@ -184,9 +195,14 @@ class SolvationFreeEnergy(TargetProperty):
             self.checkpoint_name: {
                 'progress_flag': self.progress_flag,
                 'current_state': self.current_state,
-                'elec_lambda_calcs': self.elec_lambda_calcs,
-                'vdw_lambda_calcs': self.vdw_lambda_calcs,
-                'vacuum_lambda_calcs': self.vacuum_lambda_calcs,
+                'forcefield_path': self.forcefield_path,
+                'pack_dir': self.pack_dir,
+                'equil_dir': self.equil_dir,
+                'analysis_dir': self.analysis_dir,
+                'no_charge_dir': self.no_charge_dir,
+                'sim_runs': self.sim_runs,
+                'logfiles': self.logfiles,
+                'completed_lambdas': self.completed_lambdas
             }
         }
         restarter.write_checkpoint_file(self.checkpoint_file, save_dict)
@@ -206,31 +222,25 @@ class SolvationFreeEnergy(TargetProperty):
                                               self.progress_flag)
         self.current_state = restart_dict.get('current_state',
                                               self.current_state)
-        self.elec_lambda_calcs = restart_dict.get('elec_lambda_calcs',
-                                                  self.elec_lambda_calcs)
-        self.vdw_lambda_calcs = restart_dict.get('vdw_lambda_calcs',
-                                                 self.vdw_lambda_calcs)
-        self.vacuum_lambda_calcs = restart_dict.get('vacuum_lambda_calcs',
-                                                    self.vacuum_lambda_calcs)
+        self.forcefield_path = restart_dict.get('forcefield_path',
+                                                self.forcefield_path)
+        self.pack_dir = restart_dict.get('pack_dir', self.pack_dir)
+        self.equil_dir = restart_dict.get('equil_dir', self.equil_dir)
+        self.analysis_dir = restart_dict.get('analysis_dir', self.analysis_dir)
+        self.no_charge_dir = restart_dict.get('no_charge_dir',
+                                              self.no_charge_dir)
+        self.sim_runs = restart_dict.get('sim_runs', self.sim_runs)
+        self.logfiles = restart_dict.get('logfiles', self.logfiles)
+        self.completed_lambdas = restart_dict.get('completed_lambdas',
+                                                  self.completed_lambdas)
 
-        # ADD THIS STUFF LATER FOR PROGRESS TRACKING IN A WAY THAT MAKES SENSE
-
-        # if len(self.elec_lambda_calcs) > 0:
-        #     self.outstanding_npt = self.npt_calcs[-1]
-        # if len(self.nph_calcs) > 0:
-        #     self.outstanding_nph = self.nph_calcs[-1]
-        # if self.progress_flag != 'init':
-        #     if self.progress_flag == 'done':
-        #         # restart information exists but the last calculation ended
-        #         self.restart = False
-        #         self.npt_calcs = []
-        #         self.nph_calcs = []
-        #     else:
-        #         # restart information exists and we actually want to restart
-        #         self.restart = True
-        # else:
-        #     # no restart information exists
-        #     self.restart = False
+        if self.progress_flag not in ('init', 'done'):
+            self.restart = True
+            self.logger.info(f'\tRestart data found (progress_flag='
+                             f'{self.progress_flag}); will attempt to'
+                             'resume from last checkpoint.')
+        else:
+            self.restart = False
 
     def calculate_property(
         self,
@@ -238,14 +248,17 @@ class SolvationFreeEnergy(TargetProperty):
         path_type: str,
         sim_params: dict,
         solvation_params: dict,
-        executables: None,
-        iter_num: int = 0,
-        random_seed_use: bool = False,
-        model_path: str = None,
+        executables: Optional[Dict] = None,
+        iter_num: Optional[int] = 0,
+        random_seed_use: Optional[bool] = False,
+        max_jobs: Optional[int] = None,
+        user: Optional[str] = None,
+        forcefield_path: Optional[str] = None,
+        prepared_system_path: Optional[str] = None,
         potential: Optional[Union[str,
                                   Potential]] = None,  # NOT CURRENTLY USED!!
         scheduler: Optional[Scheduler] = None,
-        storage: Optional[Storage] = None,
+        storage: Optional[Storage] = None,  # ALSO NOT USED!!
         **kwargs,
     ):
         """
@@ -269,8 +282,8 @@ class SolvationFreeEnergy(TargetProperty):
         :type solvation_params: dict
         :param random_seed_use: option to use random seed in the simulation
         :type random_seed_use: boolean
-        :param model_path: path to store the potential file
-        :type model_path: str
+        :param forcefield_path: path to store the potential file
+        :type forcefield_path: str
         :param potential: interatomic potential to be used in LAMMPS
         :type potential: str
         :param scheduler: the scheduler for managing job submission, if none
@@ -285,15 +298,20 @@ class SolvationFreeEnergy(TargetProperty):
         # ensure restart is properly read
         self.restart_property()
 
-        # Get default scheduler if one is not provided & get its root_dir
+        # Get default scheduler if one is not provided & get its self.root_dir
         if scheduler is None:
             scheduler = self.default_scheduler
-        root_dir = scheduler.root_directory
+        self.root_dir = scheduler.root_directory
 
         # Make path for coefficient files to be generated, stored, & copied
-        if model_path is None:
-            model_path = f'{os.path.realpath(root_dir)}/model/'
-        os.makedirs(model_path, exist_ok=True)
+        if self.forcefield_path is None:
+            if forcefield_path is None:
+                self.forcefield_path = \
+                    scheduler.make_path_base(
+                        self.__class__.__name__, 'ForceField'
+                        )
+            else:
+                self.forcefield_path = forcefield_path
 
         # Validate all inputs for phsyical constraints, override sim_params
         # and solvation_params with completed versions and check that
@@ -306,216 +324,74 @@ class SolvationFreeEnergy(TargetProperty):
         if pair_style.split('/')[-1] == 'omp':
             self.built_simulator.code_path += ' -sf omp'
 
-        # --- Packing procedure!! ----
+        # --- Run packmol + moltemplate ---
+        if prepared_system_path:
 
-        # Define parameters needed for packing
-        self.logger.info('\nAttempting to pack solvated system...')
-        pack_tol = solvation_params.get('pack_tol')
-        pack_boxlen = solvation_params.get('pack_boxlen')
-        packmol_exe = executables.get('packmol')
+            init_file = f"{prepared_system_path}/system_packed.in.init"
+            init_args, init_ps_args = self._parse_init_file(init_file)
 
-        # Make path for packing
-        self.pack_dir = f'{os.path.realpath(root_dir)}/pack/{iter_num}/'
-        sim_params['pack_dir'] = self.pack_dir
-        pack_inp = f'{self.pack_dir}/system_packed.inp'
-        self.logger.info(f'\tmaking packing directory, {self.pack_dir}')
-        os.makedirs(self.pack_dir, exist_ok=True)
+            settings_file = f"{prepared_system_path}/system_packed.in.settings"
+            data_file = f"{prepared_system_path}/system_packed.data"
+            charge_file = f"{prepared_system_path}/system_packed.in.charges"
 
-        # Make list that includes both solute and solvents
-        solute_params = solvation_params.get('solute')
-        solvent_params = solvation_params.get('solvent')
-        self.logger.info('\tcreating list of molecules in system')
-        solute_entry = {
-            **solute_params, 'num_molecs': solute_params.get('num_molecs', 1)
-        }
-        molec_list = [solute_entry] + solvent_params
+        else:
 
-        self.logger.info('\twriting packmol input file...')
-        with open(pack_inp, 'w') as f:
-            f.write(f'tolerance {pack_tol}\noutput system_packed.pdb\n'
-                    'filetype pdb\n\n')
-            for i, molec in enumerate(molec_list):
-                pdb = molec.get('pdb')
-                num_molecs = molec.get('num_molecs')
-                f.write(f'structure {pdb}\n'
-                        f'  number {num_molecs}\n'
-                        f'  inside cube 0.0 0.0 0.0 {pack_boxlen}\n'
-                        f'end structure\n')
+            self.pack_dir = scheduler.make_path_base(self.__class__.__name__,
+                                                     'pack')
+            self._run_init(solvation_params, executables, sim_params, iter_num)
+            init_file = f"{self.pack_dir}/system_packed.in.init"
 
-        self.logger.info('\tfinished writing packmol input script,'
-                         'running packmol...')
+            # Read the .in.init file
+            init_args, init_ps_args = self._parse_init_file(init_file)
 
-        with open(pack_inp) as stdin_file:
-            self.logger.info(
-                f"Running: {packmol_exe} < {pack_inp}  (in {self.pack_dir})")
-            result = subprocess.run(
-                packmol_exe,
-                stdin=stdin_file,
-                cwd=self.pack_dir,
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                self.logger.error(
-                    f"Packmol failed with return code {result.returncode}")
-                self.logger.error(result.stdout)
-                self.logger.error(result.stderr)
-                raise RuntimeError(
-                    f"Packmol failed (return code {result.returncode});"
-                    "see log for details")
+            # Check for differences in styles & overwrite if requested
+            for style in init_args.keys():
+                if style in sim_params.keys(
+                ) and sim_params[style] != init_args[style]:
+                    self.logger.warning(
+                        f"\ndifference in sim_params and .lt file for {style} "
+                        f"\npassed style: {sim_params[style]},"
+                        f".in.init style: {init_args[style]}"
+                        f"\nuse .in.init value -> {self.override_with_init}")
+                    if self.override_with_init:
+                        sim_params[style] = init_args[style]
 
-        self.logger.info('Finished packing system!')
+            # Check for differences in pairstyle args & overwrite if requested
+            ps_args = sim_params.get("pair_style_args")
+            for arg in init_ps_args.keys():
+                if arg in ps_args.keys() and ps_args[arg] != init_ps_args[arg]:
+                    self.logger.warning(
+                        f"\ndifference found in passed pair_style argument {arg} "
+                        f"\npassed style: {ps_args[arg]}, .in.init style: "
+                        f"{init_ps_args[arg]}"
+                        f"\nuse .in.init value -> {self.override_with_init}")
+                    if self.override_with_init:
+                        sim_params["pair_style_args"][arg] = init_ps_args[arg]
 
-        # --- Packing Complete!! ---
-
-        # --- Run moltemplate now ---
-        self.logger.info('\nUsing moltemplate to generate parameter file'
-                         '& packed_system.data')
-
-        # Check that moltemp executable exists & is executable
-        moltemp_exe = executables.get('moltemp')
-        if moltemp_exe is None:
-            raise ValueError(
-                "moltemp_exe must be specified in solvation_params")
-        if shutil.which(moltemp_exe) is None:
-            raise ValueError("moltemp executable not found or not executable: "
-                             f"{moltemp_exe}")
-
-        self.logger.info('\tgathering .lt files')
-        # Copy over lt files into , saving solvent as solv{i}.{name of lt}.lt
-        # and solute as solu.{name of lt}, checking that each is found
-        lt_header = []
-        lt_body = []
-        for i, mol in enumerate(molec_list):
-            lt = mol.get('lt')
-            if lt is None or not isfile(lt):
-                raise ValueError(
-                    f".lt file {lt} for does not exist or was not provided.")
-            num_molecs = mol.get('num_molecs')
-            mol_class = mol.get('class', 'unknown')
-            if mol_class == 'unknown':
-                raise ValueError(F"unknown class in .lt file for file {lt}")
-            name = f'comp_{i}'
-            lt_name = f'{name}.{os.path.basename(lt)}'
-            shutil.copy(mol["lt"], f"{self.pack_dir}/{lt_name}")
-            subprocess.run([
-                "sed", "-i", f"s/{mol_class}/{name}/g",
-                f"{self.pack_dir}/{lt_name}"
-            ])
-            lt_header.append(f'import "{lt_name}"\n')
-            lt_body.append(f'{name} = new {name}[{num_molecs}]\n')
-
-        self.logger.info('\twriting combined system_packed.lt file')
-        with open(f'{self.pack_dir}/system_packed.lt', "w") as f:
-            f.writelines(lt_header)
-            f.write('\n')
-            f.writelines(lt_body)
-            f.write('\n')
-            f.write('write_once("Data Boundary"){\n')
-            f.write(f'  0 {pack_boxlen} xlo xhi\n')
-            f.write(f'  0 {pack_boxlen} ylo yhi\n')
-            f.write(f'  0 {pack_boxlen} zlo zhi\n')
-            f.write('}\n\n')
-
-        # Get atom style so moltemplate will write the output file correctly
-        atom_style = sim_params.get('atom_style')
-        cmd = [
-            moltemp_exe, "-pdb", "system_packed.pdb", "-atomstyle", atom_style,
-            "system_packed.lt"
-        ]
-        self.logger.info(
-            f"\trunning moltemplate: {' '.join(cmd)}  (in {self.pack_dir})")
-        result = subprocess.run(
-            cmd,
-            cwd=self.pack_dir,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            self.logger.error(
-                f"Moltemplate failed with return code {result.returncode}")
-            self.logger.error(result.stdout)
-            self.logger.error(result.stderr)
-            raise RuntimeError(
-                f"Moltemplate failed (return code {result.returncode});"
-                "see log for details")
-
-        # Running cleanup_moltemplate.sh, assumed to be in the same directory
-        # as moltemplate.sh
-        moltemp_cleanup_exe = executables.get('moltemp_cleanup')
-        if moltemp_cleanup_exe is None:
-            raise ValueError(
-                "moltemp_cleanup_exe must be specified in solvation_params")
-        if shutil.which(moltemp_cleanup_exe) is None:
-            raise ValueError(
-                "moltemp_cleanup_exe executable not found or not executable:"
-                f"{moltemp_cleanup_exe}")
-
-        # Run moltemplate_cleanup.sh
-        result = subprocess.run(
-            [moltemp_cleanup_exe, "-base", "system_packed"],
-            cwd=self.pack_dir,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            self.logger.error("Moltemplate cleanup failed with return code "
-                              f"{result.returncode}")
-            self.logger.error(result.stdout)
-            self.logger.error(result.stderr)
-            raise RuntimeError(
-                f"Moltemplate failed (return code {result.returncode});"
-                "see log for details")
-
-        # --- moltemplate complete! ---
+            # Settings path
+            settings_file = f'{self.pack_dir}/system_packed.in.settings'
+            data_file = f'{self.pack_dir}/system_packed.data'
+            charge_file = f"{self.pack_dir}/system_packed.in.charges"
 
         # --- Process parameters, charges, and build required input blocks
         # before starting any simulations ---
 
-        # Read the .in.init file & check for difference with passed sim_params
-        init_args, init_ps_args = self._parse_init_file(
-            f"{self.pack_dir}/system_packed.in.init")
-        for style in init_args.keys():
-            if style in sim_params.keys(
-            ) and sim_params[style] != init_args[style]:
-                self.logger.warning(
-                    f"\ndifference in sim_params and .lt file for {style} "
-                    f"\npassed style: {sim_params[style]},"
-                    f".in.init style: {init_args[style]}"
-                    f"\nuse .in.init value -> {self.override_with_init}")
-                if self.override_with_init:
-                    sim_params[style] = init_args[style]
-
-        ps_args = sim_params.get("pair_style_args")
-        for arg in init_ps_args.keys():
-            if arg in ps_args.keys() and ps_args[arg] != init_ps_args[arg]:
-                self.logger.warning(
-                    f"\ndifference found in passed pair_style argument {arg} "
-                    f"\npassed style: {ps_args[arg]}, .in.init style: "
-                    f"{init_ps_args[arg]}"
-                    f"\nuse .in.init value -> {self.override_with_init}")
-                if self.override_with_init:
-                    sim_params["pair_style_args"][arg] = init_ps_args[arg]
-
-        # Read coefficients writeen by moltemplate
+        # Read coefficients written by moltemplate
         self.logger.info('\tparsing pair/bond/angle/dihedral/improper'
                          'coefficients from moltemplate .in.settings')
-        pack_settings_path = f'{self.pack_dir}/system_packed.in.settings'
-        pair_coeffs, other_coeffs = self._parse_settings_file(
-            pack_settings_path)
+        pair_coeffs, other_coeffs = self._parse_settings_file(settings_file)
         mix_rule = sim_params.get('pair_modify').split()[-1]
+        atom_style = sim_params.get('atom_style')
 
         # Parse solute vs. solvent types and charges
         self.logger.info(
             '\tparsing atom types and charges from system_packed.data')
         solvent_types, solute_types, all_charges = \
             self._parse_types_and_charges_from_data(
-                f'{self.pack_dir}/system_packed.data',
-                1,
-                atom_style,
-                self.logger
+                data_file, 1, atom_style, self.logger
             )
-        charge_file = f'{self.pack_dir}/system_packed.in.charges'
+
+        # Also search for charge_file and parse if it exists
         if isfile(charge_file):
             self.logger.info(
                 f'\tfound {charge_file}, overriding charges from Data Atoms')
@@ -529,19 +405,19 @@ class SolvationFreeEnergy(TargetProperty):
                 f'\tno {charge_file} found, using charges from Data Atoms only'
             )
 
-        # Replace .lt placeholder with 0's & check if ANY charges are present
+        # Check if ANY charges are present
         has_charges = any(abs(q) > 0.01 for q in all_charges.values())
         self.logger.info(f'\thas_charges: {has_charges}')
         if has_charges:
-            charge_params = self._build_charge_modify(
-                sorted(set(solute_types + solvent_types)), all_charges)
+            charge_params = self._build_charge_modify(solute_types,
+                                                      all_charges)
             sim_params = {**sim_params, **charge_params}
 
         # Check if solute is charged -> If so, need to run TI_ELEC & TI_VDW
         charged_solute = False
         if has_charges:
             for solu in solute_types:
-                if all_charges[solu] > 1e-8:
+                if abs(all_charges[solu]) > 0.01:
                     charged_solute = True
         sim_params['charged_solute'] = charged_solute
 
@@ -554,8 +430,7 @@ class SolvationFreeEnergy(TargetProperty):
                 f'{sorted(solute_types)} against all_charges.')
 
         # Prepare pair_style_args_str & soft_pair_style_args
-        # from pair_style_args,
-        # then add them to sim_params
+        # from pair_style_args, then add them to sim_params
         main_pair_style = sim_params.get('pair_style')
         pair_style_args = sim_params.get('pair_style_args')
         _, soft_pair_style = self._resolve_soft_style(main_pair_style)
@@ -566,16 +441,23 @@ class SolvationFreeEnergy(TargetProperty):
         sim_params['soft_pair_style'] = soft_pair_style
 
         # Write pretty version of system_packed.in.settings (pair_coeffs)
-        main_settings_file = f'{model_path}/system_packed.in.settings'
+        main_settings_file = f'{self.forcefield_path}/system_packed.in.settings'
         self._write_settings_file("elec", pair_coeffs, other_coeffs,
-                                  solvent_types, solute_types, None, mix_rule,
+                                  solvent_types, solute_types, mix_rule,
                                   main_pair_style, soft_pair_style,
                                   main_settings_file)
 
         # Write complete version of system_packed.in.charges
-        main_charge_file = f'{model_path}/system_packed.in.charges'
+        main_charge_file = f'{self.forcefield_path}/system_packed.in.charges'
         self._write_charge_file(sorted(set(solute_types + solvent_types)),
                                 all_charges, main_charge_file)
+
+        # Write another version of settings w/ lambda_values
+        vdw_settings_file = f'{self.forcefield_path}/ti_vdw.in.settings'
+        self._write_settings_file("vdw", pair_coeffs, other_coeffs,
+                                  solvent_types, solute_types, mix_rule,
+                                  main_pair_style, soft_pair_style,
+                                  vdw_settings_file)
 
         self.logger.info('\tbuilding vdW soft-core modification lines')
         vdw_params = self._build_vdw_modification_lines(
@@ -586,35 +468,60 @@ class SolvationFreeEnergy(TargetProperty):
 
         # --- Start of simulation procedures ---
 
-        # --- Minimization procedure!! ---
-        self.logger.info('\nAttempting to run minimization job')
-        min_job = self._conduct_sim(sim_params, [
-            main_settings_file, main_charge_file,
-            f'{self.pack_dir}/system_packed.data'
-        ], scheduler, path_type + f'/{iter_num}/min', "min", random_seed_use)
-        scheduler.block_until_completed(min_job)
-        # min_status = scheduler.update_job_status([min_job])
-        self.min_dir = os.path.realpath(scheduler.get_job_path(min_job))
+        if not prepared_system_path:
 
-        # --- End of minimization ---
+            if self.progress_flag == 'moltemp_done':
+                # --- Minimization procedure!! ---
+                self.logger.info('\nAttempting to run minimization job')
+                self.sim_runs['min'] = self._conduct_sim(
+                    sim_params, [
+                        main_settings_file, main_charge_file,
+                        f'{self.pack_dir}/system_packed.data'
+                    ], scheduler, path_type + f'/{iter_num}/min', "min",
+                    random_seed_use, max_jobs, user)
+                scheduler.block_until_completed(self.sim_runs['min'])
+                # min_status = scheduler.update_job_status([self.sim_runs['min']])
+                self.min_dir = os.path.realpath(
+                    scheduler.get_job_path(self.sim_runs['min']))
 
-        # --- Equilibration procedure!! ---
+                self.progress_flag = 'min_done'
+                self.checkpoint_property()
 
-        if not has_charges and sim_params.get('kspace_style') != "none":
-            sim_params['kspace_style'] = "none"
-            self.logger.warning(
-                'no charges in system, kspace_style has been changed to none.')
+            # --- End of minimization ---
 
-        self.logger.info('\nAttempting to run equilibration job')
-        equil_job = self._conduct_sim(sim_params, [
-            main_settings_file, main_charge_file,
-            f'{self.min_dir}/minimized.data'
-        ], scheduler, path_type + f'/{iter_num}/equil', "equil",
-                                      random_seed_use)  # noqa: E126
-        scheduler.block_until_completed(equil_job)
-        self.equil_dir = os.path.realpath(scheduler.get_job_path(equil_job))
+            # --- Equilibration procedure!! ---
 
-        # --- End of equilibration ---
+            if not has_charges and sim_params.get('kspace_style') != "none":
+                sim_params['kspace_style'] = "none"
+                self.logger.warning(
+                    'no charges in system, kspace_style has been changed to none.'
+                )
+
+            if self.progress_flag == 'min_done':
+                self.logger.info('\nAttempting to run equilibration job')
+                self.sim_runs['equil'] = self._conduct_sim(
+                    sim_params, [
+                        main_settings_file, main_charge_file,
+                        f'{self.min_dir}/minimized.data'
+                    ], scheduler, path_type + f'/{iter_num}/equil', "equil",
+                    random_seed_use, max_jobs, user)  # noqa: E126
+                scheduler.block_until_completed(self.sim_runs['equil'])
+                self.equil_dir = os.path.realpath(
+                    scheduler.get_job_path(self.sim_runs['equil']))
+                self.progress_flag = 'equil_done'
+                self.checkpoint_property()
+
+            # --- End of equilibration ---
+
+        else:
+
+            self.sim_runs['min'] = 0
+            self.sim_runs['equil'] = 0
+            self.equil_dir = prepared_system_path
+            shutil.copy(f"{prepared_system_path}/system_packed.data",
+                        f"{prepared_system_path}/npt_equil.data")
+            self.progress_flag = 'equil_done'
+            self.checkpoint_property()
 
         # --- TI procedural setup ---
         self.logger.info('\nGathering info for TI jobs')
@@ -623,121 +530,111 @@ class SolvationFreeEnergy(TargetProperty):
         sim_params['lambda_diff'] = lambda_diff
         self.logger.info(f'\tusing lambda_diff: {lambda_diff}')
 
-        # For tracking jobs
-        lam_jobs = []
-        log_files = {'ti_elec': [], 'ti_vdw': [], 'ti_vacuum': []}
+        # Get convergence stuff
+        tol = solvation_params.get('tol')
+        max_lambdas = solvation_params.get('max_lambdas')
+
+        # Make analysis directory if one does not exist from failed run
+        if self.analysis_dir is None:
+            self.analysis_dir = scheduler.make_path_base(
+                self.__class__.__name__, 'Analysis')
+            self.checkpoint_property()
 
         # --- TI Electronic Jobs ---
-        if charged_solute:
+        if charged_solute and self.progress_flag == 'equil_done':
             self.logger.info('\nPreparing & running TI_ELEC jobs')
-            for lam in lambda_values:
-                sim_params['lambda_c'] = lam
-                sim_params['lambda_vdw'] = 1.00
-                lam_job = self._conduct_sim(
-                    sim_params, [
-                        main_settings_file, main_charge_file,
-                        f"{self.equil_dir}/npt_equil.data"
-                    ], scheduler,
-                    path_type + f'/{iter_num}/ti_elec/lambda_{lam:.5f}',
-                    'ti_elec', random_seed_use)
-                jobpath = scheduler.get_job_path(lam_job)
-                log_files['ti_elec'].append(f'{jobpath}/lammps.out')
-                if lam == 0:
-                    self.no_charge_dir = scheduler.get_job_path(lam_job)
-                lam_jobs.append(lam_job)
-            scheduler.block_until_completed(lam_jobs)
-        else:
+            sim_params['lambda_vdw'] = 1.00
+            self._run_ti('elec', lambda_values, 'lambda_c', sim_params, [
+                main_settings_file, main_charge_file,
+                f"{self.equil_dir}/npt_equil.data"
+            ], scheduler, path_type + f'/{iter_num}/ti_elec', random_seed_use,
+                         max_jobs, user, max_lambdas, tol)
+            self.progress_flag = 'ti_elec_done'
+            self.checkpoint_property()
+        elif self.progress_flag == "equil_done":
             self.logger.info('\nno charge file -> skipping TI_ELEC jobs')
+            self.progress_flag = 'ti_elec_skip'
+            self.checkpoint_property()
+        else:
+            pass
 
         # --- TI van der Waals ---
-        self.logger.info('\nPreparing & running TI_VDW jobs')
-        for lam in lambda_values:
+        if self.progress_flag in ('ti_elec_done', 'ti_elec_skip'):
+            self.logger.info('\nPreparing & running TI_VDW jobs')
             sim_params['lambda_c'] = 0.00
-            sim_params['lambda_vdw'] = lam
-            sim_params['lambda_vdw_str'] = f'{lam:.5f}'
-            vdw_settings_file = f'{model_path}/ti_vdw_{lam:.5f}.in.settings'
-            self._write_settings_file("vdw", pair_coeffs, other_coeffs,
-                                      solvent_types, solute_types, lam,
-                                      mix_rule, main_pair_style,
-                                      soft_pair_style, vdw_settings_file)
-            lam_job = self._conduct_sim(
-                sim_params, [
-                    vdw_settings_file, main_charge_file,
-                    f"{self.equil_dir}/npt_equil.data",
-                    f"{self.no_charge_dir}/ti_elec.restart"
-                ], scheduler,
-                path_type + f'/{iter_num}/ti_vdw/lambda_{lam:.5f}', 'ti_vdw',
-                random_seed_use)
-            jobpath = scheduler.get_job_path(lam_job)
-            log_files['ti_vdw'].append(f'{jobpath}/lammps.out')
-            lam_jobs.append(lam_job)
-        scheduler.block_until_completed(lam_jobs)
-        # Don't have to wait for VDW to run VACUUM
+            self._run_ti('vdw', lambda_values, 'lambda_vdw', sim_params, [
+                vdw_settings_file, main_charge_file,
+                f"{self.equil_dir}/npt_equil.data",
+                f"{self.no_charge_dir}/ti_elec.restart"
+            ], scheduler, path_type + f'/{iter_num}/ti_vdw', random_seed_use,
+                         max_jobs, user, max_lambdas, tol)
+            self.progress_flag = 'ti_vdw_done'
+            self.checkpoint_property()
 
         # --- TI electronic solute in vacuum ---
-        if charged_solute:
+        if charged_solute and self.progress_flag == 'ti_vdw_done':
             self.logger.info('\nPreparing & running TI_VACUUM jobs')
-            for lam in lambda_values:
-                sim_params['lambda_c'] = lam
-                sim_params['lambda_vdw'] = 1.00
-                lam_job = self._conduct_sim(
-                    sim_params, [
-                        main_settings_file, main_charge_file,
-                        f"{self.equil_dir}/npt_equil.data"
-                    ], scheduler,
-                    path_type + f'/{iter_num}/ti_vacuum/lambda_{lam:.5f}',
-                    'ti_vacuum', random_seed_use)
-                jobpath = scheduler.get_job_path(lam_job)
-                log_files['ti_vacuum'].append(f'{jobpath}/lammps.out')
-                lam_jobs.append(lam_job)
+            sim_params['lambda_vdw'] = 1.00
+            self._run_ti('vacuum', lambda_values, 'lambda_c', sim_params, [
+                main_settings_file, main_charge_file,
+                f"{self.equil_dir}/npt_equil.data"
+            ], scheduler, path_type + f'/{iter_num}/ti_vacuum',
+                         random_seed_use, max_jobs, user, max_lambdas, tol)
+            self.progress_flag = 'ti_vacuum_done'
+            self.checkpoint_property()
         else:
             self.logger.info('\nno charge file -> skipping TI_VACCUM jobs')
-        scheduler.block_until_completed(lam_jobs)
+            self.progress_flag = 'ti_vacuum_skip'
+            self.checkpoint_property()
 
-        # Make analysis directory
-        analysis_dir = f'{root_dir}/analysis'
-        os.makedirs(analysis_dir, exist_ok=True)
+        # Analyze results of legs
+        if self.progress_flag in ('ti_vacuum_done', 'ti_vacuum_skip', 'done'):
+            equil_frac = solvation_params.get("equil_frac")
+            dg_total = 0
+            for leg in ('elec', 'vdw', 'vacuum'):
+                lams, dudl, dudl_std, dudl_err = self._read_results_file(
+                    f'{self.analysis_dir}/results_{leg}.dat')
 
-        # Analyze results of leg
-        dg_total = 0
-        for leg in ('elec', 'vdw', 'vacuum'):
-            dudl, dudl_std, dudl_err = [], [], []
-            for lam, f in zip(lambda_values, log_files[f"ti_{leg}"]):
-                time_series, _, avg, std = \
-                    AnalyzeLammpsLog.extract_property([f, 'f_dudl_avg'])
-                dudl.append(avg)
-                dudl_std.append(std)
-                dudl_err.append(std / np.sqrt(len(time_series)))
-            lams, dudl, dudl_std, dudl_err = self._write_results_file(
-                lambda_values, dudl, dudl_std, dudl_err,
-                f'{analysis_dir}/results_{leg}.dat')
+                # Integrate dudl for each leg
+                dg_leg = np.trapz(dudl, lams)
+                if leg in ("vdw", "elec"):
+                    dg_total += dg_leg
+                else:
+                    dg_total -= dg_leg
 
-            # Integrate dudl for each leg
-            dg_leg = np.trapezoid(dudl, lams)
-            if leg in ("vdw", "elec"):
-                dg_total += dg_leg
-            else:
-                dg_total -= dg_leg
+                # Plot histograms and timeseries for each leg
+                self.plot_leg_diagnostics(leg)
 
-        # Return results (finally!)
-        results_dict = {
-            'property_value': dg_total,
-            'property_std': None,
-            'calc_ids': (min_job, equil_job, lam_jobs),
-            'success': True,
-        }
+            self.plot_dudl_vs_lambda(self.analysis_dir)
 
-        return results_dict
+            self.progress_flag = 'done'
+            self.checkpoint_property()
+
+            # Return results (finally!)
+            results_dict = {
+                'property_value':
+                dg_total,
+                'property_std':
+                None,
+                'calc_ids': (self.sim_runs['min'], self.sim_runs['equil'],
+                             self.sim_runs['ti_elec'], self.sim_runs['ti_vdw'],
+                             self.sim_runs['ti_vacuum']),
+                'success':
+                True,
+            }
+
+            return results_dict
 
     def _conduct_sim(
-        self,
-        sim_params: Dict[str, Any],
-        sim_files: Union[str, list[str], None],
-        scheduler: Scheduler,
-        sim_path: str,
-        sim_type: str,  # ("min", "equil", "ti_elec", "ti_vdw", "ti_vacuum")
-        random_seed_use: bool
-    ) -> int:
+            self,
+            sim_params: Dict[str, Any],
+            sim_files: Union[str, list[str], None],
+            scheduler: Scheduler,
+            sim_path: str,
+            sim_type: str,  # ("min", "equil", "ti_elec", "ti_vdw", "ti_vacuum")
+            random_seed_use: bool,
+            max_jobs: Optional[int] = None,
+            user: Optional[str] = None) -> int:
         """
         Perform the simulation for the target property calculations
 
@@ -765,30 +662,13 @@ class SolvationFreeEnergy(TargetProperty):
             1, 10000) if random_seed_use else self.default_seed
         template_fill['random_seed'] = random_seed
 
-        # If no charges are present, use kspace_modify = none
-        if sim_type in ('ti_elec',
-                        'ti_vacuum') and sim_params['lambda_c'] == 0:
-            template_fill['kspace_modify'] = "none"
-
-        if sim_type == "min":
-            self.logger.info("Attempting to run minimization.")
-            selected_job_details = self.min_job_details
-        elif sim_type == "equil":
-            self.logger.info("Attempting to run equilibration")
-            selected_job_details = self.equil_job_details
-        elif sim_type == "ti_elec":
-            self.logger.info("Attempting to run TI_ELEC")
-            selected_job_details = self.ti_job_details
-        elif sim_type == "ti_vdw":
-            self.logger.info("Attempting to run TI_VDW")
-            selected_job_details = self.ti_job_details
-        elif sim_type == "ti_vacuum":
-            self.logger.info("Attempting to run TI_VAC")
-            selected_job_details = self.ti_job_details
-        else:
+        if sim_type not in ("min", "equil", "ti_elec", "ti_vdw", "ti_vacuum"):
             raise ValueError(
                 f"unknown simulation type: {sim_type}, expected one of:"
-                "('min', 'equil', 'ti_elec', 'ti_vdw', 'ti_vacuum')")
+                "(``min``, ``equil``, ``ti_elec``, ``ti_vdw``, ``ti_vacuum``)")
+
+        if max_jobs and scheduler.__class__.__name__ != "LOCAL":  # remove this later!!!!
+            scheduler._block_submit_until_max_jobs(max_jobs, user)
 
         calc_id = self.built_simulator.run(
             sim_path,
@@ -796,8 +676,413 @@ class SolvationFreeEnergy(TargetProperty):
             template_fill,
             input_template=self.input_template[sim_type],
             scheduler=scheduler,
-            job_details=selected_job_details)
+            job_details=self.ti_job_details[sim_type])
+
         return calc_id
+
+    def _run_init(self, solvation_params, executables, sim_params, iter_num):
+        """
+        Run the packing + moltemplate + equilibration techniques.
+        """
+
+        # Make list that includes solute and solvents
+        solute_params = solvation_params.get('solute')
+        solvent_params = solvation_params.get('solvent')
+        self.logger.info('\tcreating list of molecules in system')
+        solute_entry = {
+            **solute_params, 'num_molecs': solute_params.get('num_molecs', 1)
+        }
+        molec_list = [solute_entry] + solvent_params
+
+        # --- Packing procedure!! ----
+
+        if self.progress_flag == 'init':
+            # Define parameters needed for packing
+            self.logger.info('\nAttempting to pack solvated system...')
+            pack_tol = solvation_params.get('pack_tol')
+            pack_boxlen = solvation_params.get('pack_boxlen')
+            packmol_exe = executables.get('packmol')
+
+            # Make path for packing
+            pack_inp = f'{self.pack_dir}/system_packed.inp'
+
+            self.logger.info('\twriting packmol input file...')
+            with open(pack_inp, 'w') as f:
+                f.write(f'tolerance {pack_tol}\noutput system_packed.pdb\n'
+                        'filetype pdb\n\n')
+                for i, molec in enumerate(molec_list):
+                    pdb = molec.get('pdb')
+                    num_molecs = molec.get('num_molecs')
+                    f.write(f'structure {pdb}\n'
+                            f'  number {num_molecs}\n'
+                            f'  inside cube 0.0 0.0 0.0 {pack_boxlen}\n'
+                            f'end structure\n')
+
+            self.logger.info('\tfinished writing packmol input script,'
+                             'running packmol...')
+
+            with open(pack_inp) as stdin_file:
+                self.logger.info(
+                    f"Running: {packmol_exe} < {pack_inp}  (in {self.pack_dir})"
+                )
+                result = subprocess.run(
+                    packmol_exe,
+                    stdin=stdin_file,
+                    cwd=self.pack_dir,
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    self.logger.error(
+                        f"Packmol failed with return code {result.returncode}")
+                    self.logger.error(result.stdout)
+                    self.logger.error(result.stderr)
+                    raise RuntimeError(
+                        f"Packmol failed (return code {result.returncode});"
+                        "see log for details")
+
+            self.logger.info('Finished packing system!')
+            self.progress_flag = 'packmol_done'
+
+            self.checkpoint_property()
+
+        # --- Packing Complete!! ---
+
+        if self.progress_flag == 'packmol_done':
+            # --- Run moltemplate now ---
+            self.logger.info('\nUsing moltemplate to generate parameter file'
+                             '& packed_system.data')
+
+            # Check that moltemp executable exists & is executable
+            moltemp_exe = executables.get('moltemp')
+            if moltemp_exe is None:
+                raise ValueError(
+                    "moltemp_exe must be specified in solvation_params")
+            if shutil.which(moltemp_exe) is None:
+                raise ValueError(
+                    "moltemp executable not found or not executable: "
+                    f"{moltemp_exe}")
+
+            self.logger.info('\tgathering .lt files')
+            # Copy over lt files into , saving solvent as solv{i}.{name of lt}.lt
+            # and solute as solu.{name of lt}, checking that each is found
+            lt_header = []
+            lt_body = []
+            for i, mol in enumerate(molec_list):
+                lt = mol.get('lt')
+                if lt is None or not isfile(lt):
+                    raise ValueError(
+                        f".lt file {lt} for does not exist or was not provided."
+                    )
+                num_molecs = mol.get('num_molecs')
+                mol_class = mol.get('class', 'unknown')
+                if mol_class == 'unknown':
+                    raise ValueError(
+                        F"unknown class in .lt file for file {lt}")
+                name = f'comp{i}'
+                lt_name = f'{name}.{os.path.basename(lt)}'
+                shutil.copy(mol["lt"], f"{self.pack_dir}/{lt_name}")
+                subprocess.run([
+                    "sed", "-i", f"s/{mol_class}/{name}/g",
+                    f"{self.pack_dir}/{lt_name}"
+                ])
+                lt_header.append(f'import "{lt_name}"\n')
+                lt_body.append(f'{name} = new {name}[{num_molecs}]\n')
+
+            self.logger.info('\twriting combined system_packed.lt file')
+            with open(f'{self.pack_dir}/system_packed.lt', "w") as f:
+                f.writelines(lt_header)
+                f.write('\n')
+                f.writelines(lt_body)
+                f.write('\n')
+                f.write('write_once("Data Boundary"){\n')
+                f.write(f'  0 {pack_boxlen} xlo xhi\n')
+                f.write(f'  0 {pack_boxlen} ylo yhi\n')
+                f.write(f'  0 {pack_boxlen} zlo zhi\n')
+                f.write('}\n\n')
+
+            # Get atom style so moltemplate will write the output file correctly
+            atom_style = sim_params.get('atom_style')
+            cmd = [
+                moltemp_exe, "-pdb", "system_packed.pdb", "-atomstyle",
+                atom_style, "system_packed.lt"
+            ]
+            self.logger.info(
+                f"\trunning moltemplate: {' '.join(cmd)}  (in {self.pack_dir})"
+            )
+            result = subprocess.run(
+                cmd,
+                cwd=self.pack_dir,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                self.logger.error(
+                    f"Moltemplate failed with return code {result.returncode}")
+                self.logger.error(result.stdout)
+                self.logger.error(result.stderr)
+                raise RuntimeError(
+                    f"Moltemplate failed (return code {result.returncode});"
+                    "see log for details")
+
+            # Running cleanup_moltemplate.sh, assumed to be in the same directory
+            # as moltemplate.sh
+            moltemp_cleanup_exe = executables.get('moltemp_cleanup')
+            if moltemp_cleanup_exe is None:
+                raise ValueError(
+                    "moltemp_cleanup_exe must be specified in solvation_params"
+                )
+            if shutil.which(moltemp_cleanup_exe) is None:
+                raise ValueError(
+                    "moltemp_cleanup_exe executable not found or not executable:"
+                    f"{moltemp_cleanup_exe}")
+
+            # Run moltemplate_cleanup.sh
+            result = subprocess.run(
+                [moltemp_cleanup_exe, "-base", "system_packed"],
+                cwd=self.pack_dir,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                self.logger.error(
+                    "Moltemplate cleanup failed with return code "
+                    f"{result.returncode}")
+                self.logger.error(result.stdout)
+                self.logger.error(result.stderr)
+                raise RuntimeError(
+                    f"Moltemplate failed (return code {result.returncode});"
+                    "see log for details")
+
+            self.progress_flag = 'moltemp_done'
+            self.checkpoint_property()
+
+    def _run_ti(self, leg, init_lambda_values, lambda_parameter, sim_params,
+                sim_files, scheduler, sim_path, random_seed_use, max_jobs,
+                user, max_lambdas, tol):
+        """
+        Run a single TI leg (``elec``, ``vdw``, or ``vacuum``) with iterative
+        lambda refinement: submit jobs at init_lambda_values, analyze the
+        resulting dU/dL curve via check_lambda_convergence, and keep adding
+        lambda points in under-resolved regions until converged or
+        max_lambdas total lambda windows have been run.
+
+        Uses self.analysis_dir to write results_<leg>.dat, and
+        sim_params['equil_frac'] to determine the equilibration cutoff for
+        each lambda window's timeseries.
+
+        :param leg: which TI leg is being run — ``elec``, ``vdw``, or
+            ``vacuum``
+        :type leg: str
+        :param init_lambda_values: initial lambda windows to run before any
+            refinement
+        :type init_lambda_values: list[float]
+        :param lambda_parameter: the sim_params key set to the current
+            lambda value for each job (``lambda_vdw`` or ``lambda_c``)
+        :type lambda_parameter: str
+        :param sim_params: simulation parameters. Mutated in place per-job
+            to set lambda_parameter. Must contain 'equil_frac'.
+        :type sim_params: dict
+        :param sim_files: list of files needed for every job in this leg
+        :type sim_files: list[str]
+        :param scheduler: the scheduler for managing job submission
+        :type scheduler: Scheduler
+        :param sim_path: base path for this leg's jobs, without a lambda
+            suffix
+        :type sim_path: str
+        :param random_seed_use: whether to use a random seed per job
+        :type random_seed_use: bool
+        :param max_jobs: max number of jobs allowed to run concurrently
+        :type max_jobs: int
+        :param user: passed through to _conduct_sim/scheduler
+        :param max_lambdas: hard cap on total distinct lambda values run
+        :type max_lambdas: int
+        :param tol: convergence tolerance for check_lambda_convergence
+        :type tol: float
+        :returns: (dg_leg, calc_ids) — the integrated free energy for this
+            leg, and the list of job/calc ids for every simulation run
+            across all refinement rounds
+        :rtype: tuple[float, list]
+        """
+        if leg not in ('elec', 'vdw', 'vacuum'):
+            raise ValueError(
+                f"leg must be 'elec', 'vdw', or 'vacuum', got {leg!r}")
+
+        equil_frac = sim_params['equil_frac']
+        sim_type = f'ti_{leg}'
+
+        already_done = self.completed_lambdas[f'ti_{leg}']
+        lambdas_to_run = sorted(
+            lam for lam in init_lambda_values
+            if not any(np.isclose(lam, done) for done in already_done))
+
+        all_log_files = []
+        calc_ids = []
+        total_completed_lambdas = 0
+        round_num = 0
+
+        while True:
+            round_num += 1
+            self.logger.info(f'\n[{sim_type}] round {round_num}: running '
+                             f'{len(lambdas_to_run)} lambda window(s): '
+                             f'{[f"{lam:.5f}" for lam in lambdas_to_run]}')
+
+            lamjob = {}
+            lamjobpath = {}
+            lamlogfile = {}
+
+            for lam in lambdas_to_run:
+                sim_params[lambda_parameter] = lam
+                if (leg == 'vacuum' and lam == 0.0):
+                    sim_params['kspace_modify'] = 'gewald 0.01'
+
+                lamjob_id = self._conduct_sim(sim_params, sim_files, scheduler,
+                                              f'{sim_path}/lambda_{lam:.5f}',
+                                              sim_type, random_seed_use,
+                                              max_jobs, user)
+
+                lamjob[lam] = lamjob_id
+                lamjobpath[lam] = scheduler.get_job_path(lamjob_id)
+                lamlogfile[lam] = f'{lamjobpath[lam]}/lammps.out'
+
+                if leg == 'elec' and lam == 0:
+                    self.no_charge_dir = lamjobpath[lam]
+
+                sleep(5)
+
+            lamjobs = list(lamjob.values())
+            scheduler.block_until_completed(lamjobs)
+
+            self.logger.info(f'[{sim_type}] round {round_num}: all jobs'
+                             ' completed')
+
+            # Loop over recent jobs and store them if they completed successfully
+            newly_completed = []
+            for lam in lambdas_to_run:
+                job_status = scheduler.check_completed_job_status(lamjob[lam])
+                if job_status != 'done':
+                    self.logger.warning(
+                        f'[{sim_type}] lambda={lam:.5f} did not complete '
+                        f'successfully (status={job_status}), will retry on '
+                        'next restart')
+                    continue
+
+                self.completed_lambdas[f'ti_{leg}'].append(lam)
+                self.logfiles[f'ti_{leg}'].append(lamlogfile[lam])
+                self.sim_runs[f'ti_{leg}'].append(lamjob[lam])
+                newly_completed.append(lam)
+
+            self.checkpoint_property()
+
+            # --- analyze only newly completed lambda windows this round ---
+            lambda_values, dudl, dudl_std, dudl_err = [], [], [], []
+            for lam in newly_completed:
+                log_file = lamlogfile[lam]
+                _, avg, std, err = self._get_production_stats(
+                    log_file, 'f_dUdL_avg', equil_frac)
+                lambda_values.append(lam)
+                dudl.append(avg)
+                dudl_std.append(std)
+                dudl_err.append(err)
+
+            lams, dudl, dudl_std, dudl_err = self._write_results_file(
+                lambda_values, dudl, dudl_std, dudl_err,
+                f'{self.analysis_dir}/results_{leg}.dat')
+
+            dg_leg = np.trapz(dudl, lams)
+            self.logger.info(
+                f'[{sim_type}] round {round_num}: dG = '
+                f'{dg_leg:.4f} ({len(lams)} total lambda windows)')
+
+            if tol <= 0.0:
+                self.logger.warning(
+                    f'[{sim_type}] refinement off -'
+                    ' potentially stopping without convergence')
+                break
+
+            total_completed_lambdas = len(self.completed_lambdas[f'ti_{leg}'])
+            if total_completed_lambdas >= max_lambdas:
+                self.logger.warning(
+                    f'[{sim_type}] reached max_lambdas ({max_lambdas}) -'
+                    ' stopping refinement without full convergence')
+                break
+
+            converged, new_lambdas, errors = self.check_lambda_convergence(
+                lams, dudl, tol=tol)
+
+            if converged:
+                self.logger.info(f'[{sim_type}] CONVERGED after'
+                                 f' {total_completed_lambdas} lambda windows'
+                                 f' (max error < {tol})')
+                break
+
+            remaining_lambdas = max_lambdas - total_completed_lambdas
+            if len(new_lambdas) > remaining_lambdas:
+                self.logger.warning(
+                    f'[{sim_type}] {len(new_lambdas)} new lambda point(s)'
+                    f' proposed but only {remaining_lambdas} remain in'
+                    ' max_lambdas budget - truncating')
+                new_lambdas = new_lambdas[:remaining_lambdas]
+
+            self.logger.info(
+                f'[{sim_type}] NOT converged (max error >= {tol}) - adding'
+                f' {len(new_lambdas)} lambda point(s): '
+                f'{[f"{lam:.5f}" for lam in new_lambdas]}')
+
+            lambdas_to_run = new_lambdas
+
+        # Plot and save timeseries / histogram plots
+        lambdas = self.completed_lambdas[f'ti_{leg}']
+        logs = self.logfiles[f'ti_{leg}']
+        n = len(lambdas)
+
+        if n > 0:
+            ncols = min(3, n)
+            nrows = (n + ncols - 1) // ncols  # ceil division
+
+            fig_ts, axes_ts = plt.subplots(nrows,
+                                           ncols,
+                                           figsize=(4 * ncols, 3 * nrows),
+                                           squeeze=False)
+            fig_hist, axes_hist = plt.subplots(nrows,
+                                               ncols,
+                                               figsize=(4 * ncols, 3 * nrows),
+                                               squeeze=False)
+            axes_ts_flat = axes_ts.flatten()
+            axes_hist_flat = axes_hist.flatten()
+
+            for i, (lam, log) in enumerate(zip(lambdas, logs)):
+                AnalyzeLammpsLog.plot_timeseries(logfile=log,
+                                                 quantity='f_dUdL_avg',
+                                                 name='<dUdL>',
+                                                 ax=axes_ts_flat[i],
+                                                 bins=50)
+                axes_ts_flat[i].set_title(f'\u03bb = {lam:.5f}')
+
+                AnalyzeLammpsLog.plot_histogram(logfile=log,
+                                                quantity='f_dUdL_avg',
+                                                name='<dUdL>',
+                                                ax=axes_hist_flat[i],
+                                                bins=50)
+                axes_hist_flat[i].set_title(f'\u03bb = {lam:.5f}')
+
+            for j in range(i + 1, len(axes_ts_flat)):
+                axes_ts_flat[j].set_visible(False)
+                axes_hist_flat[j].set_visible(False)
+
+            fig_ts.tight_layout()
+            fig_hist.tight_layout()
+
+            fig_ts.savefig(f'{self.analysis_dir}/ti_{leg}_timeseries.png',
+                           dpi=300,
+                           bbox_inches='tight')
+            fig_hist.savefig(f'{self.analysis_dir}/ti_{leg}_histograms.png',
+                             dpi=300,
+                             bbox_inches='tight')
+            plt.close(fig_ts)
+            plt.close(fig_hist)
+
+        return dg_leg, calc_ids
 
     def calculate_with_error(
         self,
@@ -824,13 +1109,113 @@ class SolvationFreeEnergy(TargetProperty):
         """
         pass
 
-    def validate_sim_inputs(self):
+    def plot_dudl_vs_lambda(self, analysis_dir):
         """
-        Use this function to verify that ALL inputs are physically correct.
-        Wouldn't want to waste our time preparing a system that's going to
-        error out down the line anyhow!
+        Plot dUdL vs. lambda for all three legs,
+        ``ti_elec``, ``ti_vdw``, & ``ti_vacuum``
         """
-        pass
+        lam_elec, du_elec, _, se_elec = \
+            self._read_results_file(f'{analysis_dir}/results_elec.dat')
+        lam_vdw, du_vdw, _, se_vdw = \
+            self._read_results_file(f'{analysis_dir}/results_vdw.dat')
+        lam_vac, du_vac, _, se_vac = \
+            self._read_results_file(f'{analysis_dir}/results_vacuum.dat')
+
+        fig, ax = plt.subplots()
+        ax.errorbar(lam_elec,
+                    du_elec,
+                    yerr=se_elec,
+                    label='elec',
+                    marker='o',
+                    color='blue')
+        ax.errorbar(lam_vdw,
+                    du_vdw,
+                    yerr=se_vdw,
+                    label='vdw',
+                    marker='o',
+                    color='red')
+        ax.errorbar(lam_vac,
+                    du_vac,
+                    yerr=se_vac,
+                    label='vacuum',
+                    marker='o',
+                    color='black')
+
+        ax.set_xlabel(r'$\lambda$')
+        ax.set_ylabel(r'dU/d$\lambda$')
+        ax.legend()
+        fig.tight_layout()
+
+        fig.savefig(f'{analysis_dir}/dudl_vs_lambda.png', dpi=300)
+        plt.close(fig)
+
+    def plot_leg_diagnostics(self, leg):
+        """
+        Plot and save per-lambda timeseries and histogram grids for a
+        single TI leg (``elec``, ``vdw``, or ``vacuum``), using whatever
+        lambda windows are currently recorded in self.completed_lambdas
+        and self.logfiles for that leg.
+
+        Safe to call standalone (e.g. after a restart that skips straight
+        to analysis) since it only reads from self.completed_lambdas /
+        self.logfiles, not from any in-progress _run_ti state.
+
+        :param leg: which TI leg to plot — ``elec``, ``vdw``, or ``vacuum``
+        :type leg: str
+        """
+        lambdas = self.completed_lambdas[f'ti_{leg}']
+        logs = self.logfiles[f'ti_{leg}']
+        n = len(lambdas)
+
+        if n == 0:
+            self.logger.warning(
+                f'[ti_{leg}] no completed lambdas to plot, skipping diagnostics'
+            )
+            return
+
+        ncols = min(3, n)
+        nrows = (n + ncols - 1) // ncols  # ceil division
+
+        fig_ts, axes_ts = plt.subplots(nrows,
+                                       ncols,
+                                       figsize=(4 * ncols, 3 * nrows),
+                                       squeeze=False)
+        fig_hist, axes_hist = plt.subplots(nrows,
+                                           ncols,
+                                           figsize=(4 * ncols, 3 * nrows),
+                                           squeeze=False)
+        axes_ts_flat = axes_ts.flatten()
+        axes_hist_flat = axes_hist.flatten()
+
+        for i, (lam, log) in enumerate(zip(lambdas, logs)):
+            AnalyzeLammpsLog.plot_timeseries(logfile=log,
+                                             quantity='f_dUdL_avg',
+                                             name='<dUdL>',
+                                             ax=axes_ts_flat[i])
+            axes_ts_flat[i].set_title(f'\u03bb = {lam:.5f}')
+
+            AnalyzeLammpsLog.plot_histogram(logfile=log,
+                                            quantity='f_dUdL_avg',
+                                            name='<dUdL>',
+                                            ax=axes_hist_flat[i],
+                                            bins=50)
+            axes_hist_flat[i].set_title(f'\u03bb = {lam:.5f}')
+
+        for j in range(i + 1, len(axes_ts_flat)):
+            axes_ts_flat[j].set_visible(False)
+            axes_hist_flat[j].set_visible(False)
+
+        fig_ts.tight_layout()
+        fig_hist.tight_layout()
+
+        fig_ts.savefig(f'{self.analysis_dir}/ti_{leg}_timeseries.png',
+                       dpi=300,
+                       bbox_inches='tight')
+        fig_hist.savefig(f'{self.analysis_dir}/ti_{leg}_histograms.png',
+                         dpi=300,
+                         bbox_inches='tight')
+        plt.close(fig_ts)
+        plt.close(fig_hist)
 
     def _resolve_soft_style(self, base_pair_style: str) -> str:
         """
@@ -1304,7 +1689,7 @@ class SolvationFreeEnergy(TargetProperty):
             return eps_ij, 1.00
 
     def _write_settings_file(self, leg, pair_coeffs, other_coeffs,
-                             solvent_types, solute_types, lam, mix_rule,
+                             solvent_types, solute_types, mix_rule,
                              main_pair_style, soft_pair_style, output_path):
         """
         Compute all cross terms using the mixing rule and write a TI
@@ -1337,8 +1722,6 @@ class SolvationFreeEnergy(TargetProperty):
         :rtype: str
         """
         is_elec = leg == "elec"
-        lj_lam = 1.0 if is_elec else lam
-        lj_lam_str = f"{lj_lam:.5f}"
 
         solvent_sorted = sorted(solvent_types)
         solute_sorted = sorted(solute_types)
@@ -1346,8 +1729,7 @@ class SolvationFreeEnergy(TargetProperty):
         lines = []
         if leg != "elec":
             lines.append("# " + 35 * "=" + "\n")
-            lines.append(
-                f"# TI force field coeffs — {leg} leg, lambda={lam:.5f}\n")
+            lines.append(f"# TI force field coeffs — {leg} leg\n")
             lines.append(f"# Mixing rule: {mix_rule}\n")
             lines.append("# " + 35 * "=" + "\n\n")
         else:
@@ -1358,36 +1740,25 @@ class SolvationFreeEnergy(TargetProperty):
             lines.append("# " + 35 * "=" + "\n\n")
 
         # --- Solvent like-like and cross terms ---
-
         lines.append("# -- Solvent: regular style, never scaled ---\n")
-        if is_elec:
-            for i in solvent_sorted:
-                for j in solvent_sorted:
-                    if j < i:
-                        continue
-                    eps_i, sig_i = pair_coeffs[i]
-                    eps_j, sig_j = pair_coeffs[j]
-                    if i == j:
-                        eps_ij, sig_ij = eps_i, sig_i
-                    else:
-                        eps_ij, sig_ij = self._compute_mixed_params(
-                            eps_i, sig_i, eps_j, sig_j, mix_rule)
+        for i in solvent_sorted:
+            for j in solvent_sorted:
+                if j < i:
+                    continue
+                eps_i, sig_i = pair_coeffs[i]
+                eps_j, sig_j = pair_coeffs[j]
+                if i == j:
+                    eps_ij, sig_ij = eps_i, sig_i
+                else:
+                    eps_ij, sig_ij = self._compute_mixed_params(
+                        eps_i, sig_i, eps_j, sig_j, mix_rule)
+
+                if is_elec:
                     if eps_ij == 0.0:
                         sig_ij = max(sig_ij, 1.0)
                     lines.append(
                         f"pair_coeff      {i} {j} {eps_ij:.3f} {sig_ij:.3f}\n")
-        else:
-            for i in solvent_sorted:
-                for j in solvent_sorted:
-                    if j < i:
-                        continue
-                    eps_i, sig_i = pair_coeffs[i]
-                    eps_j, sig_j = pair_coeffs[j]
-                    if i == j:
-                        eps_ij, sig_ij = eps_i, sig_i
-                    else:
-                        eps_ij, sig_ij = self._compute_mixed_params(
-                            eps_i, sig_i, eps_j, sig_j, mix_rule)
+                else:
                     lines.append(f"pair_coeff      {i} {j} {main_pair_style} "
                                  f"{eps_ij:.3f} {sig_ij:.3f}\n")
         lines.append("\n")
@@ -1395,74 +1766,55 @@ class SolvationFreeEnergy(TargetProperty):
         # --- Solute like-like and intramolecular cross terms ---
         lines.append(
             "# -- Solute: like-like and intramolecular cross terms ---\n")
-        if is_elec:
-            for i in solute_sorted:
-                for j in solute_sorted:
-                    if j < i:
-                        continue
-                    eps_i, sig_i = pair_coeffs[i]
-                    eps_j, sig_j = pair_coeffs[j]
-                    if i == j:
-                        eps_ij, sig_ij = eps_i, sig_i
-                    else:
-                        eps_ij, sig_ij = self._compute_mixed_params(
-                            eps_i, sig_i, eps_j, sig_j, mix_rule)
+        for i in solute_sorted:
+            for j in solute_sorted:
+                if j < i:
+                    continue
+                eps_i, sig_i = pair_coeffs[i]
+                eps_j, sig_j = pair_coeffs[j]
+                if i == j:
+                    eps_ij, sig_ij = eps_i, sig_i
+                else:
+                    eps_ij, sig_ij = self._compute_mixed_params(
+                        eps_i, sig_i, eps_j, sig_j, mix_rule)
+
+                if is_elec:
                     if eps_ij == 0.0:
                         sig_ij = max(sig_ij, 1.0)
                     lines.append(f"pair_coeff      {i} {j} "
                                  f"{eps_ij:.3f} {sig_ij:.3f}\n")
-        else:
-            for i in solute_sorted:
-                for j in solute_sorted:
-                    if j < i:
-                        continue
-                    eps_i, sig_i = pair_coeffs[i]
-                    eps_j, sig_j = pair_coeffs[j]
-                    if i == j:
-                        eps_ij, sig_ij = eps_i, sig_i
-                    else:
-                        eps_ij, sig_ij = self._compute_mixed_params(
-                            eps_i, sig_i, eps_j, sig_j, mix_rule)
+                else:
                     lines.append(f"pair_coeff      {i} {j}"
                                  f" {main_pair_style} "
                                  f"{eps_ij:.3f} {sig_ij:.3f}\n")
         lines.append("\n")
 
         # --- Solvent-solute cross terms ---
+        lines.append(
+            "# -- Solvent-solute cross terms for coulomb leg---\n"
+            if is_elec else "# -- Solvent-solute cross terms for LJ leg--- \n")
 
-        if is_elec:
-            lines.append(
-                "# -- Solvent-solute cross terms for coulomb leg---\n")
-            for i in solvent_sorted:
-                for j in solute_sorted:
-                    ii, jj = min(i, j), max(i, j)
-                    eps_i, sig_i = pair_coeffs[i]
-                    eps_j, sig_j = pair_coeffs[j]
-                    eps_ij, sig_ij = self._compute_mixed_params(
-                        eps_i, sig_i, eps_j, sig_j, mix_rule)
-                    if eps_ij == 0.0:
-                        sig_ij = max(sig_ij, 1.0)
+        for i in solvent_sorted:
+            for j in solute_sorted:
+                ii, jj = min(i, j), max(i, j)
+                eps_i, sig_i = pair_coeffs[i]
+                eps_j, sig_j = pair_coeffs[j]
+                eps_ij, sig_ij = self._compute_mixed_params(
+                    eps_i, sig_i, eps_j, sig_j, mix_rule)
+                if eps_ij == 0.0:
+                    sig_ij = max(sig_ij, 1.0)
+
+                if is_elec:
                     lines.append(f"pair_coeff      {ii} {jj} "
                                  f"{eps_ij:.3f} {sig_ij:.3f}\n")
-            lines.append("\n")
-        else:
-            lines.append("# -- Solvent-solute cross terms "
-                         "for LJ leg--- \n")
-            for i in solvent_sorted:
-                for j in solute_sorted:
-                    ii, jj = min(i, j), max(i, j)
-                    eps_i, sig_i = pair_coeffs[i]
-                    eps_j, sig_j = pair_coeffs[j]
-                    eps_ij, sig_ij = self._compute_mixed_params(
-                        eps_i, sig_i, eps_j, sig_j, mix_rule)
-                    if eps_ij == 0.0:
-                        sig_ij = max(sig_ij, 1.0)
+                else:
                     lines.append(
                         f"pair_coeff      {ii} {jj} {soft_pair_style} "
-                        f"{eps_ij:.3f} {sig_ij:.3f} {lj_lam_str}\n")
-            lines.append("\n")
+                        f"{eps_ij:.3f} {sig_ij:.3f} ${{lambda_vdw}}\n")
+        lines.append("\n")
+        if not is_elec:
             lines.append("# -- Explicit zero out of other pair style"
-                         " for cross terms--- \n")
+                         " for cross terms in VDW setup --- \n")
             for i in solvent_sorted:
                 for j in solute_sorted:
                     ii, jj = min(i, j), max(i, j)
@@ -1563,6 +1915,13 @@ class SolvationFreeEnergy(TargetProperty):
         else:
             errors.append(f"free_energy must be ``helmholtz`` or "
                           f"``gibbs``, got {free_energy}")
+
+        equil_frac = solvation_params.get('equil_frac')
+        if equil_frac < 0 or equil_frac >= 1:
+            errors.append("equil_frac must be between 0 and 1",
+                          f"got {equil_frac}")
+        else:
+            sim_params['equil_frac'] = equil_frac
 
         for exe_key in ('packmol', 'moltemp', 'moltemp_cleanup'):
             exe = executables.get(exe_key)
@@ -1680,3 +2039,105 @@ class SolvationFreeEnergy(TargetProperty):
                 dudl_err.append(float(parts[3]))
 
         return lambda_values, dudl, dudl_std, dudl_err
+
+    def _get_production_stats(self, logpath, quantity, equil_frac=0.25):
+
+        _, timeseries, avg, std = \
+            AnalyzeLammpsLog.extract_property([logpath, quantity])
+
+        full_len = len(timeseries)
+        prod_len = int((1 - equil_frac) * full_len)
+        equil_data = timeseries[-prod_len:]
+
+        return (equil_data, np.mean(equil_data), np.std(equil_data),
+                np.std(equil_data) / np.sqrt(prod_len))
+
+    def _compute_point_convergence_error(self, lambdas, dudl):
+        """
+        For each interior lambda point, compute the triangle area formed
+        by that point and its two neighbors — a measure of how much the
+        curve bends there, and how much removing the point would change
+        the integral. Endpoints (lambda=0, lambda=1) have no two-sided
+        neighbor and are left at 0.0 (not flagged for convergence).
+
+        :param lambdas: sorted lambda values
+        :type lambdas: list or np.ndarray
+        :param dudl: dU/dL values corresponding to each lambda
+        :type dudl: list or np.ndarray
+        :returns: array of per-point errors, same length as lambdas, with
+            0.0 at the endpoints
+        :rtype: np.ndarray
+        """
+        lambdas = np.asarray(lambdas)
+        dudl = np.asarray(dudl)
+        n = len(lambdas)
+
+        errors = np.zeros(n)
+        for i in range(1, n - 1):
+            errors[i] = self._triangle_area(lambdas[i - 1], dudl[i - 1],
+                                            lambdas[i], dudl[i],
+                                            lambdas[i + 1], dudl[i + 1])
+
+        return errors
+
+    @staticmethod
+    def _triangle_area(x0, y0, x1, y1, x2, y2):
+        """
+        Area of the triangle formed by three (x, y) points, via the
+        shoelace formula.
+        """
+        return 0.5 * abs(x0 * (y1 - y2) + x1 * (y2 - y0) + x2 * (y0 - y1))
+
+    def check_lambda_convergence(self, lambdas, dudl, tol=0.01):
+        """
+        Check whether the current lambda spacing is converged, and if not,
+        propose new lambda values to add in the most under-resolved
+        intervals.
+
+        Convergence is judged by the max per-point error from
+        _compute_point_convergence_error being below tol. If not converged,
+        a new lambda point is proposed at the midpoint of each interval
+        flanking a non-converged point (i.e. between lambda[i-1] and
+        lambda[i], and between lambda[i] and lambda[i+1], for every point i
+        whose error exceeds tol).
+
+        :param lambdas: sorted lambda values
+        :type lambdas: list or np.ndarray
+        :param dudl: dU/dL values corresponding to each lambda
+        :type dudl: list or np.ndarray
+        :param tol: convergence threshold on the max per-point error
+        :type tol: float
+        :returns: (converged, new_lambdas, errors) where converged is a
+            bool, new_lambdas is a sorted list of proposed new lambda
+            values to add (empty if converged), and errors is the array of
+            per-point errors for diagnostic/plotting purposes
+        :rtype: tuple
+        """
+        lambdas = np.asarray(lambdas)
+        errors = self._compute_point_convergence_error(lambdas, dudl)
+
+        max_error = np.max(errors)
+        converged = max_error < tol
+
+        self.logger.info(
+            f'\tlambda convergence check: max error = {max_error:.6f} '
+            f'(tol = {tol}) -> {"converged" if converged else "NOT converged"}'
+        )
+
+        if converged:
+            return True, [], errors
+
+        new_lambdas = set()
+        for i in np.where(errors >= tol)[0]:
+            if i > 0:
+                new_lambdas.add(0.5 * (lambdas[i - 1] + lambdas[i]))
+            if i < len(lambdas) - 1:
+                new_lambdas.add(0.5 * (lambdas[i] + lambdas[i + 1]))
+            self.logger.info(
+                f'\tlambda={lambdas[i]:.5f} has error {errors[i]:.6f} >= tol'
+                ' - adding neighboring point(s)')
+
+        new_lambdas = sorted(lam for lam in new_lambdas
+                             if not np.any(np.isclose(lam, lambdas)))
+
+        return False, new_lambdas, errors
