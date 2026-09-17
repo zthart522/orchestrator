@@ -386,37 +386,37 @@ class SlurmScheduler(HPCScheduler, ABC):
         # Assumes $USER is defined by the shell
         if user is None:
             user = "$USER"
-        cmd = f"squeue -u {user} -p {self.default_queue} | wc -l"
+        cmd = f"squeue -u {user} -p {self.default_queue} --noheader | wc -l"
         if self.remote_machine is not None:
-            sacct_command = (f"ssh {self.remote_machine} "
-                             f"'source /etc/profile; {cmd}'")
+            cmd = (f"ssh {self.remote_machine} "
+                   f"'source /etc/profile; {cmd}'")
         out = sp.run(cmd, capture_output=True, shell=True, encoding='UTF-8')
-        return int(out.stdout) - 1
+        return int(out.stdout)
 
-    def _block_submit_until_max_jobs(self, max_jobs: int, user=None):
+    def _block_max_submit(self, max_submit: int, user=None):
         """
         Iteratively check squeue until the number of submitted jobs
-        is less than the max_jobs.
+        is less than the max_submit.
 
-        :param max_jobs: number of maximum jobs the user wants
+        :param max_submit: number of maximum jobs the user wants
         to run at one time
-        :type max_jobs: int
+        :type max_submit: int
         :param user: HPC username for squeue -u <user> command
         :type user: str
         """
         wait_cycle_counter = 0
         job_count = self._get_active_job_count(user)
-        while job_count >= max_jobs:
+        while job_count >= max_submit:
             if wait_cycle_counter % 5 == 0:
-                self.logger.info(
-                    f'Wait iteration {wait_cycle_counter} '
-                    f'[cycle time = {self.synch_check_frequency} s]: '
-                    f'{job_count} active jobs >= max_jobs ({max_jobs}), waiting...'
-                )
+                msg = (f'Wait iteration {wait_cycle_counter} '
+                       f'[cycle time = {self.synch_check_frequency} s]: '
+                       f'{job_count} active jobs >= max_submit '
+                       f'({max_submit}), waiting...')
+                self.logger.info(msg)
             wait_cycle_counter += 1
             sleep(self.synch_check_frequency)
             job_count = self._get_active_job_count(user)
 
         self.logger.info(
-            f'Active job count ({job_count}) now below max_jobs ({max_jobs}), '
-            f'continuing...')
+            f'Active job count ({job_count}) now below max_submit '
+            f'({max_submit}), continuing...')
