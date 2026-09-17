@@ -277,17 +277,36 @@ class SolvationFreeEnergy(TargetProperty):
         else:
             self.restart = False
 
+        # Save finished_jobs as the union of unique jobs found
+        # in the analysis .json file and the restart file
         if self.analysis_dir is not None:
             manifest_path = os.path.join(self.analysis_dir,
                                          "finished_jobs.json")
             try:
                 with open(manifest_path) as f:
-                    self.finished_jobs = json.load(f)
+                    json_finished_jobs = json.load(f)
             except (FileNotFoundError, json.JSONDecodeError) as e:
                 self.logger.warning(
                     'analysis_dir set but finished_jobs.json missing or '
                     f'unreadable at {manifest_path} ({e}); '
-                    'keeping checkpoint value')
+                    'using checkpoint value only')
+                json_finished_jobs = {}
+
+            merged = {}
+            for leg in set(self.finished_jobs) | set(json_finished_jobs):
+                checkpoint_jobs = self.finished_jobs.get(leg, [])
+                manifest_jobs = json_finished_jobs.get(leg, [])
+
+                seen_ids = set()
+                unique_jobs = []
+                for job in checkpoint_jobs + manifest_jobs:
+                    if job['job_id'] in seen_ids:
+                        continue
+                    seen_ids.add(job['job_id'])
+                    unique_jobs.append(job)
+                merged[leg] = unique_jobs
+
+            self.finished_jobs = merged
 
     def calculate_property(
         self,
