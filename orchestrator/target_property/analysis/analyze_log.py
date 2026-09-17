@@ -394,6 +394,7 @@ class AnalyzeLammpsLog:
         equil_frac: Optional[float] = None,
         savepath: Optional[str] = None,
         ax: Optional[plt.Axes] = None,
+        logger=None,
         **kwargs,
     ):
         """
@@ -408,12 +409,16 @@ class AnalyzeLammpsLog:
         :param name: [Optional] name of the y-axis for plotting, if you want
         something other than what appears in the LAMMPs log
         :type: str
-        :param equil_frac: [Optional] Portion of the beginning of the timeseries to truncate
+        :param equil_frac: [Optional] Portion of the beginning of the
+            timeseries to truncate
         :type: str
         :param savepath: [Optional] path to save the corresponding image to
         :type: str
         :param ax: [Optional] matplotlib Axes for adding plot to subplot figure
         :type: plt.Axes
+        :param logger: [Optional] logger-like object for adding logging
+            messages; must have a ``.warning(msg)`` method.
+        :type logger: object, optional
         :param **kwargs: [Optional] other plot formatting inputs to plt.plot()
         :param **kwargs: dict
         """
@@ -421,9 +426,16 @@ class AnalyzeLammpsLog:
         if created_fig:
             fig, ax = plt.subplots()
 
-        _, timeseries, _, _ = AnalyzeLammpsLog.extract_property(
-            [logfile, quantity])
-        _, steps, _, _ = AnalyzeLammpsLog.extract_property([logfile, "Step"])
+        try:
+            _, timeseries, _, _ = AnalyzeLammpsLog.extract_property(
+                [logfile, quantity])
+            _, steps, _, _ = AnalyzeLammpsLog.extract_property(
+                [logfile, "Step"])
+        except (FileNotFoundError, KeyError, ValueError, IndexError) as e:
+            if logger is not None:
+                logger.warning(
+                    f'Could not extract "{quantity}" from {logfile}: {e}')
+            return ax
 
         if equil_frac is not None:
             start = int(len(timeseries) * equil_frac)
@@ -446,6 +458,7 @@ class AnalyzeLammpsLog:
                        equil_frac: Optional[float] = None,
                        savepath: Optional[str] = None,
                        ax: Optional[plt.Axes] = None,
+                       logger=None,
                        **kwargs):
         """
         Reads lammps logfile, truncates the first equil_frac of the
@@ -459,12 +472,16 @@ class AnalyzeLammpsLog:
         :param name: [Optional] label for the x-axis, if you want
             something other than what appears in the LAMMPs log
         :type name: str
-        :param equil_frac: [Optional] Portion of the beginning of the timeseries to truncate
+        :param equil_frac: [Optional] Portion of the beginning of the
+            timeseries to truncate
         :type equil_frac: float
         :param savepath: [Optional] path to save the corresponding image to
         :type savepath: str
         :param ax: [Optional] matplotlib Axes for adding plot to subplot figure
         :type ax: plt.Axes
+        :param logger: [Optional] logger-like object for adding logging
+            messages; must have a ``.warning(msg)`` method.
+        :type logger: object, optional
         :param kwargs: [Optional] other plot formatting inputs to ax.hist()
         :type kwargs: dict
         """
@@ -472,8 +489,14 @@ class AnalyzeLammpsLog:
         if created_fig:
             fig, ax = plt.subplots()
 
-        _, timeseries, _, _ = AnalyzeLammpsLog.extract_property(
-            [logfile, quantity])
+        try:
+            _, timeseries, _, _ = AnalyzeLammpsLog.extract_property(
+                [logfile, quantity])
+        except (FileNotFoundError, KeyError, ValueError, IndexError) as e:
+            if logger is not None:
+                logger.warning(
+                    f'Could not extract "{quantity}" from {logfile}: {e}')
+            return ax
 
         if equil_frac is not None:
             start = int(len(timeseries) * equil_frac)
