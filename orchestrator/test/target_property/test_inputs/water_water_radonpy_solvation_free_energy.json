@@ -16,8 +16,7 @@
                 "tasks":48,
                 "extra_args":{
                     "preamble": "module purge\nmodule load gcc/15.1.0\nmodule load openmpi/5.0.8\nmodule load hdf5/1.10.11\n\nexport FI_PROVIDER=tcp\nexport OMP_NUM_THREADS=4"
-                },
-                "custom_preamble": "ibrun"
+                }
             },
             "ti_job_details":
             {
@@ -41,7 +40,7 @@
         "calculate_property_args": {
             "path_type": "01_solvation_free_energy_test",
             "user": "zthart",
-            "max_submit": 20,
+            "max_submit": 4,
             "random_seed_use": false,
             "executables":{
                 "packmol": "path/to/packmol",
