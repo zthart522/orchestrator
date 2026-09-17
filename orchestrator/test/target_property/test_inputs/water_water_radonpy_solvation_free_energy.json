@@ -42,6 +42,7 @@
             "user": "zthart",
             "max_submit": 4,
             "random_seed_use": false,
+            "accelerator": null,
             "executables":{
                 "packmol": "path/to/packmol",
                 "moltemp": "path/to/moltemplate.sh",
