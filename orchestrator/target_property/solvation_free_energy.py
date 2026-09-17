@@ -2540,11 +2540,13 @@ class SolvationFreeEnergy(TargetProperty):
         lt_basename = os.path.basename(lt_file)
         base_name = os.path.splitext(lt_basename)[0]
         shutil.copy(structure_file, mt_dir)
+        structure_filename = os.path.basename(structure_file)
 
         cmd = [
-            moltemp_exe, f"-{structure_type}", structure_file, "-atomstyle",
-            atom_style, lt_basename
+            moltemp_exe, f"-{structure_type}", structure_filename,
+            "-atomstyle", atom_style, lt_basename
         ]
+
         result = subprocess.run(cmd,
                                 cwd=mt_dir,
                                 capture_output=True,
