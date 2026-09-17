@@ -1,0 +1,11 @@
+#-------------------------------------------------------------
+# FORCE FIELD STYLE
+#-------------------------------------------------------------
+
+#Set Styles
+atom_style		full/kk
+bond_style		harmonic
+angle_style		harmonic
+dihedral_style  hybrid harmonic fourier
+improper_style  hybrid harmonic cvff
+pair_style      hybrid/overlay/kk lj/cut/kk 11.0 buck/kk 11.0 coul/wolf/kk 0.2 11.0

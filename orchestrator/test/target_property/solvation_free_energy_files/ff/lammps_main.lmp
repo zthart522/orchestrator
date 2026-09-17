@@ -1,0 +1,32 @@
+#-------------------------------------------------------------
+# INITIALIZE LAMMPS RUN
+#-------------------------------------------------------------
+
+#General Parameters
+units			real
+boundary		p p p
+
+#Set Force Field Style
+include         ./lammps_forcefield_style.lmp
+
+#Get Datafile
+#include         ./lammps_data_location.lmp
+
+#FF Parameter File List
+include         ./lammps_forcefield_paramlist.lmp
+
+#Set Wolf Electrostatics
+pair_coeff      *   *   coul/wolf/kk
+
+#Pairwise Exclusions
+special_bonds   lj/coul 0.0 0.0 1.0
+
+#Neighbor List Parameters
+neighbor        2.0 bin
+neigh_modify    delay 0 every 1 check yes
+
+#-------------------------------------------------------------
+# SIMULATION COMMANDS
+#-------------------------------------------------------------
+
+#include         ./lammps_commands.lmp

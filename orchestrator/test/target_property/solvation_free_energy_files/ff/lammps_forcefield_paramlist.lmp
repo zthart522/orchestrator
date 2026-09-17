@@ -1,0 +1,6 @@
+#-------------------------------------------------------------
+# FORCE FIELD PARAMETER FILES
+#-------------------------------------------------------------
+
+include         ./lammps_parameters_covalent.lmp
+include         ./lammps_parameters_pairwise.lmp

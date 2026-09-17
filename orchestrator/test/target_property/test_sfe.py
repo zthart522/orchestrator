@@ -1,9 +1,9 @@
 import json
 from orchestrator.target_property.factory import target_property_builder
 from orchestrator.scheduler.factory import scheduler_builder
+import sys
 
-with open('./test_inputs/'
-          'water_ethanol_solvation_free_energy_input.json', 'r') as f:
+with open(sys.argv[1], 'r') as f:
     config = json.load(f)
 
 tp_config = config['target_property']
@@ -21,4 +21,5 @@ scheduler = scheduler_builder.build(
 x = solvation_free_energy.calculate_property(
     **tp_config['calculate_property_args'], scheduler=scheduler)
 
-print(f"SOLVATION FREE ENERGY RESULT: {x['property_value']}")
+print("SOLVATION FREE ENERGY RESULT: "
+      f"{x['property_value']} +/- {x['property_std']}")

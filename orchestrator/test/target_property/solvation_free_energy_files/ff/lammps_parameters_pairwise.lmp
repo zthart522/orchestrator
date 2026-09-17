@@ -1,0 +1,255 @@
+pair_coeff    1   1  lj/cut/kk              0.08320000          3.03422000 #   f       f
+pair_coeff    1   2  lj/cut/kk              0.09470459          3.21082538 #   f       c3f
+pair_coeff    1   3  lj/cut/kk              0.04160000          2.60926111 #   f       h2
+pair_coeff    1   4  lj/cut/kk              0.09470459          3.21082538 #   f       c3
+pair_coeff    1   5  lj/cut/kk              0.04160000          2.80882861 #   f       hc
+pair_coeff    1   6  lj/cut/kk              0.09212166          3.11015970 #   f       ow
+pair_coeff    1   7  lj/cut/kk              0.00000000          1.74190126 #   f       hw
+pair_coeff    1   8  lj/cut/kk              0.08796363          3.13681064 #   f       oh
+pair_coeff    1   9  lj/cut/kk              0.04160000          2.71088193 #   f       h1
+pair_coeff    1  10  lj/cut/kk              0.01977473          1.27756910 #   f       ho
+pair_coeff    1  11  lj/cut/kk              0.11032751          3.04116206 #   f       o
+pair_coeff    1  12  lj/cut/kk              0.09066510          3.17160472 #   f       c
+pair_coeff    1  13  lj/cut/kk              0.07771950          3.09456002 #   f       os
+pair_coeff    1  14  lj/cut/kk              0.01220032          2.86711344 #   f       LLM_H1
+pair_coeff    1  15  lj/cut/kk              0.08251360          2.92826754 #   f       LLM_O2
+pair_coeff    1  16  lj/cut/kk              0.08407284          3.30802705 #   f       LLM_N1
+pair_coeff    1  17  lj/cut/kk              0.10460468          3.26874369 #   f       LLM_C2
+pair_coeff    1  18  lj/cut/kk              0.10460468          3.13148131 #   f       LLM_C1
+pair_coeff    1  19  lj/cut/kk              0.07850452          2.99222305 #   f       LLM_N3
+pair_coeff    1  20  lj/cut/kk              0.08679002          3.25587833 #   f       LLM_N4
+pair_coeff    1  21  lj/cut/kk              0.08679002          3.05670051 #   f       LLM_N2
+pair_coeff    1  22  lj/cut/kk              0.08251360          3.11119977 #   f       LLM_O1
+pair_coeff    2   2  lj/cut/kk              0.10780000          3.39771000 #   c3f     c3f
+pair_coeff    2   3  lj/cut/kk              0.04735230          2.76113195 #   c3f     h2
+pair_coeff    2   4  lj/cut/kk              0.10780000          3.39771000 #   c3f     c3
+pair_coeff    2   5  lj/cut/kk              0.04735230          2.97231519 #   c3f     hc
+pair_coeff    2   6  lj/cut/kk              0.10485991          3.29118512 #   c3f     ow
+pair_coeff    2   7  lj/cut/kk              0.00000000          1.84328782 #   c3f     hw
+pair_coeff    2   8  lj/cut/kk              0.10012692          3.31938727 #   c3f     oh
+pair_coeff    2   9  lj/cut/kk              0.04735230          2.86866757 #   c3f     h1
+pair_coeff    2  10  lj/cut/kk              0.02250911          1.35192942 #   c3f     ho
+pair_coeff    2  11  lj/cut/kk              0.12558320          3.21817150 #   c3f     o
+pair_coeff    2  12  lj/cut/kk              0.10320194          3.35620651 #   c3f     c
+pair_coeff    2  13  lj/cut/kk              0.08846626          3.27467747 #   c3f     os
+pair_coeff    2  14  lj/cut/kk              0.01388734          3.03399246 #   c3f     LLM_H1
+pair_coeff    2  15  lj/cut/kk              0.09392328          3.09870601 #   c3f     LLM_O2
+pair_coeff    2  16  lj/cut/kk              0.09569813          3.50056925 #   c3f     LLM_N1
+pair_coeff    2  17  lj/cut/kk              0.11906904          3.45899941 #   c3f     LLM_C2
+pair_coeff    2  18  lj/cut/kk              0.11906904          3.31374775 #   c3f     LLM_C1
+pair_coeff    2  19  lj/cut/kk              0.08935984          3.16638402 #   c3f     LLM_N3
+pair_coeff    2  20  lj/cut/kk              0.09879102          3.44538523 #   c3f     LLM_N4
+pair_coeff    2  21  lj/cut/kk              0.09879102          3.23461436 #   c3f     LLM_N2
+pair_coeff    2  22  lj/cut/kk              0.09392328          3.29228572 #   c3f     LLM_O1
+pair_coeff    3   3  lj/cut/kk              0.02080000          2.24382000 #   h2      h2
+pair_coeff    3   4  lj/cut/kk              0.04735230          2.76113195 #   h2      c3
+pair_coeff    3   5  lj/cut/kk              0.02080000          2.41543700 #   h2      hc
+pair_coeff    3   6  lj/cut/kk              0.04606083          2.67456504 #   h2      ow
+pair_coeff    3   7  lj/cut/kk              0.00000000          1.49793858 #   h2      hw
+pair_coeff    3   8  lj/cut/kk              0.04398181          2.69748338 #   h2      oh
+pair_coeff    3   9  lj/cut/kk              0.02080000          2.33120828 #   h2      h1
+pair_coeff    3  10  lj/cut/kk              0.00988737          1.09863865 #   h2      ho
+pair_coeff    3  11  lj/cut/kk              0.05516376          2.61523089 #   h2      o
+pair_coeff    3  12  lj/cut/kk              0.04533255          2.72740435 #   h2      c
+pair_coeff    3  13  lj/cut/kk              0.03885975          2.66115018 #   h2      os
+pair_coeff    3  14  lj/cut/kk              0.00610016          2.46555872 #   h2      LLM_H1
+pair_coeff    3  15  lj/cut/kk              0.04125680          2.51814786 #   h2      LLM_O2
+pair_coeff    3  16  lj/cut/kk              0.04203642          2.84472000 #   h2      LLM_N1
+pair_coeff    3  17  lj/cut/kk              0.05230234          2.81093848 #   h2      LLM_C2
+pair_coeff    3  18  lj/cut/kk              0.05230234          2.69290045 #   h2      LLM_C1
+pair_coeff    3  19  lj/cut/kk              0.03925226          2.57314606 #   h2      LLM_N3
+pair_coeff    3  20  lj/cut/kk              0.04339501          2.79987499 #   h2      LLM_N4
+pair_coeff    3  21  lj/cut/kk              0.04339501          2.62859310 #   h2      LLM_N2
+pair_coeff    3  22  lj/cut/kk              0.04125680          2.67545944 #   h2      LLM_O1
+pair_coeff    4   4  lj/cut/kk              0.10780000          3.39771000 #   c3      c3
+pair_coeff    4   5  lj/cut/kk              0.04735230          2.97231519 #   c3      hc
+pair_coeff    4   6  lj/cut/kk              0.10485991          3.29118512 #   c3      ow
+pair_coeff    4   7  lj/cut/kk              0.00000000          1.84328782 #   c3      hw
+pair_coeff    4   8  lj/cut/kk              0.10012692          3.31938727 #   c3      oh
+pair_coeff    4   9  lj/cut/kk              0.04735230          2.86866757 #   c3      h1
+pair_coeff    4  10  lj/cut/kk              0.02250911          1.35192942 #   c3      ho
+pair_coeff    4  11  lj/cut/kk              0.12558320          3.21817150 #   c3      o
+pair_coeff    4  12  lj/cut/kk              0.10320194          3.35620651 #   c3      c
+pair_coeff    4  13  lj/cut/kk              0.08846626          3.27467747 #   c3      os
+pair_coeff    4  14  lj/cut/kk              0.01388734          3.03399246 #   c3      LLM_H1
+pair_coeff    4  15  lj/cut/kk              0.09392328          3.09870601 #   c3      LLM_O2
+pair_coeff    4  16  lj/cut/kk              0.09569813          3.50056925 #   c3      LLM_N1
+pair_coeff    4  17  lj/cut/kk              0.11906904          3.45899941 #   c3      LLM_C2
+pair_coeff    4  18  lj/cut/kk              0.11906904          3.31374775 #   c3      LLM_C1
+pair_coeff    4  19  lj/cut/kk              0.08935984          3.16638402 #   c3      LLM_N3
+pair_coeff    4  20  lj/cut/kk              0.09879102          3.44538523 #   c3      LLM_N4
+pair_coeff    4  21  lj/cut/kk              0.09879102          3.23461436 #   c3      LLM_N2
+pair_coeff    4  22  lj/cut/kk              0.09392328          3.29228572 #   c3      LLM_O1
+pair_coeff    5   5  lj/cut/kk              0.02080000          2.60018000 #   hc      hc
+pair_coeff    5   6  lj/cut/kk              0.04606083          2.87912727 #   hc      ow
+pair_coeff    5   7  lj/cut/kk              0.00000000          1.61250736 #   hc      hw
+pair_coeff    5   8  lj/cut/kk              0.04398181          2.90379850 #   hc      oh
+pair_coeff    5   9  lj/cut/kk              0.02080000          2.50950911 #   hc      h1
+pair_coeff    5  10  lj/cut/kk              0.00988737          1.18266725 #   hc      ho
+pair_coeff    5  11  lj/cut/kk              0.05516376          2.81525499 #   hc      o
+pair_coeff    5  12  lj/cut/kk              0.04533255          2.93600796 #   hc      c
+pair_coeff    5  13  lj/cut/kk              0.03885975          2.86468639 #   hc      os
+pair_coeff    5  14  lj/cut/kk              0.00610016          2.65413525 #   hc      LLM_H1
+pair_coeff    5  15  lj/cut/kk              0.04125680          2.71074663 #   hc      LLM_O2
+pair_coeff    5  16  lj/cut/kk              0.04203642          3.06229642 #   hc      LLM_N1
+pair_coeff    5  17  lj/cut/kk              0.05230234          3.02593114 #   hc      LLM_C2
+pair_coeff    5  18  lj/cut/kk              0.05230234          2.89886505 #   hc      LLM_C1
+pair_coeff    5  19  lj/cut/kk              0.03925226          2.76995133 #   hc      LLM_N3
+pair_coeff    5  20  lj/cut/kk              0.04339501          3.01402146 #   hc      LLM_N4
+pair_coeff    5  21  lj/cut/kk              0.04339501          2.82963919 #   hc      LLM_N2
+pair_coeff    5  22  lj/cut/kk              0.04125680          2.88009008 #   hc      LLM_O1
+pair_coeff    6   6  lj/cut/kk              0.10200000          3.18800000 #   ow      ow
+pair_coeff    6   7  lj/cut/kk              0.00000000          1.78549713 #   ow      hw
+pair_coeff    6   8  lj/cut/kk              0.09739610          3.21531796 #   ow      oh
+pair_coeff    6   9  lj/cut/kk              0.04606083          2.77872921 #   ow      h1
+pair_coeff    6  10  lj/cut/kk              0.02189520          1.30954378 #   ow      ho
+pair_coeff    6  11  lj/cut/kk              0.12215809          3.11727550 #   ow      o
+pair_coeff    6  12  lj/cut/kk              0.10038725          3.25098285 #   ow      c
+pair_coeff    6  13  lj/cut/kk              0.08605347          3.17200990 #   ow      os
+pair_coeff    6  14  lj/cut/kk              0.01350858          2.93887084 #   ow      LLM_H1
+pair_coeff    6  15  lj/cut/kk              0.09136166          3.00155549 #   ow      LLM_O2
+pair_coeff    6  16  lj/cut/kk              0.09308810          3.39081953 #   ow      LLM_N1
+pair_coeff    6  17  lj/cut/kk              0.11582160          3.35055299 #   ow      LLM_C2
+pair_coeff    6  18  lj/cut/kk              0.11582160          3.20985525 #   ow      LLM_C1
+pair_coeff    6  19  lj/cut/kk              0.08692268          3.06711166 #   ow      LLM_N3
+pair_coeff    6  20  lj/cut/kk              0.09609664          3.33736564 #   ow      LLM_N4
+pair_coeff    6  21  lj/cut/kk              0.09609664          3.13320284 #   ow      LLM_N2
+pair_coeff    6  22  lj/cut/kk              0.09136166          3.18906610 #   ow      LLM_O1
+pair_coeff    7   7  lj/cut/kk              0.00000000          1.00000000 #   hw      hw
+pair_coeff    7   8  lj/cut/kk              0.00000000          1.80079705 #   hw      oh
+pair_coeff    7   9  lj/cut/kk              0.00000000          1.55627761 #   hw      h1
+pair_coeff    7  10  lj/cut/kk              0.00000000          0.73343371 #   hw      ho
+pair_coeff    7  11  lj/cut/kk              0.00000000          1.74588659 #   hw      o
+pair_coeff    7  12  lj/cut/kk              0.00000000          1.82077181 #   hw      c
+pair_coeff    7  13  lj/cut/kk              0.00000000          1.77654158 #   hw      os
+pair_coeff    7  14  lj/cut/kk              0.00000000          1.64596783 #   hw      LLM_H1
+pair_coeff    7  15  lj/cut/kk              0.00000000          1.68107550 #   hw      LLM_O2
+pair_coeff    7  16  lj/cut/kk              0.00000000          1.89908988 #   hw      LLM_N1
+pair_coeff    7  17  lj/cut/kk              0.00000000          1.87653787 #   hw      LLM_C2
+pair_coeff    7  18  lj/cut/kk              0.00000000          1.79773756 #   hw      LLM_C1
+pair_coeff    7  19  lj/cut/kk              0.00000000          1.71779143 #   hw      LLM_N3
+pair_coeff    7  20  lj/cut/kk              0.00000000          1.86915206 #   hw      LLM_N4
+pair_coeff    7  21  lj/cut/kk              0.00000000          1.75480699 #   hw      LLM_N2
+pair_coeff    7  22  lj/cut/kk              0.00000000          1.78609422 #   hw      LLM_O1
+pair_coeff    8   8  lj/cut/kk              0.09300000          3.24287000 #   oh      oh
+pair_coeff    8   9  lj/cut/kk              0.04398181          2.80254012 #   oh      h1
+pair_coeff    8  10  lj/cut/kk              0.02090694          1.32076525 #   oh      ho
+pair_coeff    8  11  lj/cut/kk              0.11664433          3.14398742 #   oh      o
+pair_coeff    8  12  lj/cut/kk              0.09585614          3.27884050 #   oh      c
+pair_coeff    8  13  lj/cut/kk              0.08216934          3.19919084 #   oh      os
+pair_coeff    8  14  lj/cut/kk              0.01289885          2.96405401 #   oh      LLM_H1
+pair_coeff    8  15  lj/cut/kk              0.08723793          3.02727580 #   oh      LLM_O2
+pair_coeff    8  16  lj/cut/kk              0.08888645          3.41987544 #   oh      LLM_N1
+pair_coeff    8  17  lj/cut/kk              0.11059384          3.37926386 #   oh      LLM_C2
+pair_coeff    8  18  lj/cut/kk              0.11059384          3.23736048 #   oh      LLM_C1
+pair_coeff    8  19  lj/cut/kk              0.08299931          3.09339373 #   oh      LLM_N3
+pair_coeff    8  20  lj/cut/kk              0.09175919          3.36596351 #   oh      LLM_N4
+pair_coeff    8  21  lj/cut/kk              0.09175919          3.16005124 #   oh      LLM_N2
+pair_coeff    8  22  lj/cut/kk              0.08723793          3.21639319 #   oh      LLM_O1
+pair_coeff    9   9  lj/cut/kk              0.02080000          2.42200000 #   h1      h1
+pair_coeff    9  10  lj/cut/kk              0.00988737          1.14142645 #   h1      ho
+pair_coeff    9  11  lj/cut/kk              0.05516376          2.71708422 #   h1      o
+pair_coeff    9  12  lj/cut/kk              0.04533255          2.83362641 #   h1      c
+pair_coeff    9  13  lj/cut/kk              0.03885975          2.76479189 #   h1      os
+pair_coeff    9  14  lj/cut/kk              0.00610016          2.56158288 #   h1      LLM_H1
+pair_coeff    9  15  lj/cut/kk              0.04125680          2.61622017 #   h1      LLM_O2
+pair_coeff    9  16  lj/cut/kk              0.04203642          2.95551106 #   h1      LLM_N1
+pair_coeff    9  17  lj/cut/kk              0.05230234          2.92041388 #   h1      LLM_C2
+pair_coeff    9  18  lj/cut/kk              0.05230234          2.79777871 #   h1      LLM_C1
+pair_coeff    9  19  lj/cut/kk              0.03925226          2.67336034 #   h1      LLM_N3
+pair_coeff    9  20  lj/cut/kk              0.04339501          2.90891950 #   h1      LLM_N4
+pair_coeff    9  21  lj/cut/kk              0.04339501          2.73096683 #   h1      LLM_N2
+pair_coeff    9  22  lj/cut/kk              0.04125680          2.77965844 #   h1      LLM_O1
+pair_coeff   10  10  lj/cut/kk              0.00470000          0.53792500 #   ho      ho
+pair_coeff   10  11  lj/cut/kk              0.02622232          1.28049207 #   ho      o
+pair_coeff   10  12  lj/cut/kk              0.02154901          1.33541542 #   ho      c
+pair_coeff   10  13  lj/cut/kk              0.01847214          1.30297548 #   ho      os
+pair_coeff   10  14  lj/cut/kk              0.00289974          1.20720828 #   ho      LLM_H1
+pair_coeff   10  15  lj/cut/kk              0.01961159          1.23295744 #   ho      LLM_O2
+pair_coeff   10  16  lj/cut/kk              0.01998219          1.39285653 #   ho      LLM_N1
+pair_coeff   10  17  lj/cut/kk              0.02486213          1.37631613 #   ho      LLM_C2
+pair_coeff   10  18  lj/cut/kk              0.02486213          1.31852132 #   ho      LLM_C1
+pair_coeff   10  19  lj/cut/kk              0.01865872          1.25988613 #   ho      LLM_N3
+pair_coeff   10  20  lj/cut/kk              0.02062800          1.37089912 #   ho      LLM_N4
+pair_coeff   10  21  lj/cut/kk              0.02062800          1.28703459 #   ho      LLM_N2
+pair_coeff   10  22  lj/cut/kk              0.01961159          1.30998170 #   ho      LLM_O1
+pair_coeff   11  11  lj/cut/kk              0.14630000          3.04812000 #   o       o
+pair_coeff   11  12  lj/cut/kk              0.12022662          3.17886110 #   o       c
+pair_coeff   11  13  lj/cut/kk              0.10306008          3.10164014 #   o       os
+pair_coeff   11  14  lj/cut/kk              0.01617826          2.87367317 #   o       LLM_H1
+pair_coeff   11  15  lj/cut/kk              0.10941731          2.93496719 #   o       LLM_O2
+pair_coeff   11  16  lj/cut/kk              0.11148495          3.31559556 #   o       LLM_N1
+pair_coeff   11  17  lj/cut/kk              0.13871123          3.27622232 #   o       LLM_C2
+pair_coeff   11  18  lj/cut/kk              0.13871123          3.13864590 #   o       LLM_C1
+pair_coeff   11  19  lj/cut/kk              0.10410107          2.99906903 #   o       LLM_N3
+pair_coeff   11  20  lj/cut/kk              0.11508806          3.26332752 #   o       LLM_N4
+pair_coeff   11  21  lj/cut/kk              0.11508806          3.06369400 #   o       LLM_N2
+pair_coeff   11  22  lj/cut/kk              0.10941731          3.11831795 #   o       LLM_O1
+pair_coeff   12  12  lj/cut/kk              0.09880000          3.31521000 #   c       c
+pair_coeff   12  13  lj/cut/kk              0.08469286          3.23467684 #   c       os
+pair_coeff   12  14  lj/cut/kk              0.01329499          2.99693183 #   c       LLM_H1
+pair_coeff   12  15  lj/cut/kk              0.08991711          3.06085490 #   c       LLM_O2
+pair_coeff   12  16  lj/cut/kk              0.09161626          3.45780933 #   c       LLM_N1
+pair_coeff   12  17  lj/cut/kk              0.11399031          3.41674727 #   c       LLM_C2
+pair_coeff   12  18  lj/cut/kk              0.11399031          3.27326987 #   c       LLM_C1
+pair_coeff   12  19  lj/cut/kk              0.08554832          3.12770622 #   c       LLM_N3
+pair_coeff   12  20  lj/cut/kk              0.09457723          3.40329939 #   c       LLM_N4
+pair_coeff   12  21  lj/cut/kk              0.09457723          3.19510311 #   c       LLM_N2
+pair_coeff   12  22  lj/cut/kk              0.08991711          3.25207001 #   c       LLM_O1
+pair_coeff   13  13  lj/cut/kk              0.07260000          3.15610000 #   os      os
+pair_coeff   13  14  lj/cut/kk              0.01139667          2.92413030 #   os      LLM_H1
+pair_coeff   13  15  lj/cut/kk              0.07707831          2.98650054 #   os      LLM_O2
+pair_coeff   13  16  lj/cut/kk              0.07853484          3.37381214 #   os      LLM_N1
+pair_coeff   13  17  lj/cut/kk              0.09771422          3.33374757 #   os      LLM_C2
+pair_coeff   13  18  lj/cut/kk              0.09771422          3.19375553 #   os      LLM_C1
+pair_coeff   13  19  lj/cut/kk              0.07333332          3.05172790 #   os      LLM_N3
+pair_coeff   13  20  lj/cut/kk              0.08107303          3.32062636 #   os      LLM_N4
+pair_coeff   13  21  lj/cut/kk              0.08107303          3.11748759 #   os      LLM_N2
+pair_coeff   13  22  lj/cut/kk              0.07707831          3.17307065 #   os      LLM_O1
+pair_coeff	 14	 14  buck	 1322.3350000	0.22080928800	  5.652486000 #   LLM_H1  LLM_H1
+pair_coeff	 14	 15  buck	 8943.2560700	0.22546882300	 40.862429500 #   LLM_H1  LLM_O2
+pair_coeff	 14	 16  buck	 9112.2545700	0.25218152800	 45.259308100 #   LLM_H1  LLM_N1
+pair_coeff	 14	 17  buck	11337.6027700	0.24959266500	 60.213983700 #   LLM_H1  LLM_C2
+pair_coeff	 14	 18  buck	11337.6027700	0.24023441100	 60.213983700 #   LLM_H1  LLM_C1
+pair_coeff	 14	 19  buck	 8508.7309500	0.23023451100	 45.259308100 #   LLM_H1  LLM_N3
+pair_coeff	 14	 20  buck	 9406.7561600	0.24873623300	 45.259308100 #   LLM_H1  LLM_N4
+pair_coeff	 14	 21  buck	 9406.7561600	0.23492848600	 45.259308100 #   LLM_H1  LLM_N2
+pair_coeff	 14	 22  buck	 8943.2560700	0.23880996200	  0.862429500 #   LLM_H1  LLM_O1
+pair_coeff	 15	 15  buck	60485.3000000	0.23032924900	295.398900000 #   LLM_O2  LLM_O2
+pair_coeff	 15	 16  buck	61628.2757400	0.25827743700	327.184408100 #   LLM_O2  LLM_N1
+pair_coeff	 15	 17  buck	76678.8180100	0.25556257500	435.293367700 #   LLM_O2  LLM_C2
+pair_coeff	 15	 18  buck	76678.8180100	0.24576008600	435.293367700 #   LLM_O2  LLM_C1
+pair_coeff	 15	 19  buck	57546.5065600	0.23530488600	327.184408100 #   LLM_O2  LLM_N3
+pair_coeff	 15	 20  buck	63620.0578100	0.25466475800	327.184408100 #   LLM_O2  LLM_N4
+pair_coeff	 15	 21  buck	63620.0578100	0.24021008800	327.184408100 #   LLM_O2  LLM_N2
+pair_coeff	 15	 22  buck	60485.3000000	0.24426955800	295.398900000 #   LLM_O2  LLM_O1
+pair_coeff	 16	 16  buck	62792.8500000	0.29394473800	362.390100000 #   LLM_N1  LLM_N1
+pair_coeff	 16	 17  buck	78127.7986400	0.29043337200	482.131798200 #   LLM_N1  LLM_C2
+pair_coeff	 16	 18  buck	78127.7986400	0.27783925000	482.131798200 #   LLM_N1  LLM_C1
+pair_coeff	 16	 19  buck	58633.9486500	0.26455026500	362.390100000 #   LLM_N1  LLM_N3
+pair_coeff	 16	 20  buck	64822.2702900	0.28927438600	362.390100000 #   LLM_N1  LLM_N4
+pair_coeff	 16	 21  buck	64822.2702900	0.27076665100	362.390100000 #   LLM_N1  LLM_N2
+pair_coeff	 16	 22  buck	61628.2757400	0.27593571500	327.184408100 #   LLM_N1  LLM_O1
+pair_coeff	 17	 17  buck	97207.7700000	0.28700490600	641.438800000 #   LLM_C2  LLM_C2
+pair_coeff	 17	 18  buck	97207.7700000	0.27470006900	641.438800000 #   LLM_C2  LLM_C1
+pair_coeff	 17	 19  buck	72953.2316700	0.26170265600	482.131798200 #   LLM_C2  LLM_N3
+pair_coeff	 17	 20  buck	80652.8335700	0.28587306800	482.131798200 #   LLM_C2  LLM_N4
+pair_coeff	 17	 21  buck	80652.8335700	0.26778439900	482.131798200 #   LLM_C2  LLM_N2
+pair_coeff	 17	 22  buck	76678.8180100	0.27283916200	435.293367700 #   LLM_C2  LLM_O1
+pair_coeff	 18	 18  buck	97207.7700000	0.26340695300	641.438800000 #   LLM_C1  LLM_C1
+pair_coeff	 18	 19  buck	72953.2316700	0.25143294800	482.131798200 #   LLM_C1  LLM_N3
+pair_coeff	 18	 20  buck	80652.8335700	0.27366302600	482.131798200 #   LLM_C1  LLM_N4
+pair_coeff	 18	 21  buck	80652.8335700	0.25704162300	482.131798200 #   LLM_C1  LLM_N2
+pair_coeff	 18	 22  buck	76678.8180100	0.26169543000	435.293367700 #   LLM_C1  LLM_O1
+pair_coeff	 19	 19  buck	54750.5000000	0.24050024100	362.390100000 #   LLM_N3  LLM_N3
+pair_coeff	 19	 20  buck	60528.9562000	0.26076125900	362.390100000 #   LLM_N3  LLM_N4
+pair_coeff	 19	 21  buck	60528.9562000	0.24562679900	362.390100000 #   LLM_N3  LLM_N2
+pair_coeff	 19	 22  buck	57546.5065600	0.24987303300	327.184408100 #   LLM_N3  LLM_O1
+pair_coeff	 20	 20  buck	66917.2800000	0.28475012200	362.390100000 #   LLM_N4  LLM_N4
+pair_coeff	 20	 21  buck	66917.2800000	0.26679882100	362.390100000 #   LLM_N4  LLM_N2
+pair_coeff	 20	 22  buck	63620.0578100	0.27181609600	327.184408100 #   LLM_N4  LLM_O1
+pair_coeff	 21	 21  buck	66917.2800000	0.25097667600	362.390100000 #   LLM_N2  LLM_N2
+pair_coeff	 21	 22  buck	63620.0578100	0.25541156400	327.184408100 #   LLM_N2  LLM_O1
+pair_coeff	 22	 22  buck	60485.3000000	0.26000600600	295.398900000 #   LLM_O1  LLM_O1
+
+pair_coeff      *   *   coul/wolf/kk
