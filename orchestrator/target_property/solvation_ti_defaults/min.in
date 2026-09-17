@@ -20,8 +20,8 @@ read_data       system_packed.data
 ###           Model Definition           ###
 ##############################################
 
-pair_style      {{ pair_style }} {{ pair_style_args_str }}
-pair_modify     {{ pair_modify }}
+pair_style      {{ pair_style }}
+{% if pair_modify != "none" %}pair_modify     {{ pair_modify }} {% endif %}
 bond_style      {{ bond_style }}
 angle_style     {{ angle_style }}
 dihedral_style  {{ dihedral_style }}

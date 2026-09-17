@@ -1,7 +1,7 @@
 # ============================================================
-# Thermodynamic Integration - van der Waals
-# Decoupling charges: lambda_vdw 1.0 -> 0.0
-# Lambda value: {{ lambda_vdw }}
+# Thermodynamic Integration - Electrostatics
+# Decoupling charges: lambda_c 1.0 -> 0.0
+# Lambda value: {{ lambda_c }}
 # ============================================================
 
 ##############################################
@@ -14,10 +14,10 @@ variable       P               equal      {{ press }}
 variable       P_damp          equal      {{ press_damp }}
 variable       seed            equal      {{ random_seed }}
 
-variable       lambda_vdw      equal     {{ lambda_vdw }}
-variable       lambda_c        equal     {{ lambda_c }}
-variable       lambda_diff     equal     {{ lambda_diff }}
-variable       nlambda_diff    equal    -{{ lambda_diff }}
+variable       lambda_vdw      equal      {{ lambda_vdw }}
+variable       lambda_c        equal      {{ lambda_c }}
+variable       lambda_diff     equal      {{ lambda_diff }}
+variable       nlambda_diff    equal     -{{ lambda_diff }}
 
 ##############################################
 ###           General Settings             ###
@@ -29,57 +29,57 @@ boundary        p p p
 kspace_style    {{ kspace_style }}
 neighbor        2.0 bin
 neigh_modify    delay 0 every 1 check yes
-{% if kpsace_style != 'none' and kspace_modify != 'none' %}kspace_modify   {{ kspace_modify }} {% endif %}
+{% if kspace_style != 'none' and kspace_modify != 'none' %}kspace_modify   {{ kspace_modify }} {% endif %}
 
 ##############################################
 ###              Read Data                 ###
 ##############################################
 
-{% if charged_solute == true %}
-read_restart    ti_elec.restart
-{% else %}
-read_data       npt_equil.data
-{% endif %}
+read_data      {{ input_data }}
 
 ##############################################
 ###           Model Definition             ###
 ##############################################
 
-pair_style      hybrid/overlay &
-                {{ pair_style }} {{ pair_style_args_str }} &
-                {{ soft_pair_style }} {{ soft_pair_style_args_str }}
-pair_modify     {{ pair_modify }}
+pair_style      {{ pair_style }}
+{% if pair_modify != "none" %}pair_modify     {{ pair_modify }} {% endif %}
 bond_style      {{ bond_style }}
 angle_style     {{ angle_style }}
 dihedral_style  {{ dihedral_style }}
 improper_style  {{ improper_style }}
 {% if special_bonds != 'none' %}special_bonds   {{ special_bonds }} {% endif %}
 
-include         ti_vdw.in.settings
-
+include         system_packed.in.settings
+include         system_packed.in.charges
 
 ##############################################
-###                Groups                  ###
+###                Groups                ###
 ##############################################
 
 group           solute   molecule 1
 group           solvent  subtract all solute
 
 ##############################################
-###        van der Waals Modification      ###
+###         Charge Modification          ###
 ##############################################
+
+# Scale charges
+{{ charge_modification_block }}
+
+# --- Compute dU/dL using central difference---
+{{ delta_charge_block }}
 
 # --- Compute dU/dL using central difference---
 compute         FEPf all fep ${T} &
-{{ fep_vdw_forward }}
+{{ fep_elec_forward }}
 
 compute         FEPb all fep ${T} &
-{{ fep_vdw_backward }}
+{{ fep_elec_backward }}
 
 variable        dUdL equal (c_FEPf[1]-c_FEPb[1])/(2.0*v_lambda_diff)
 
 ##############################################
-###       Dynamics / Minimization        ###
+###       Dynamics / Minimization          ###
 ##############################################
 
 {% if free_energy == 'gibbs' %}
@@ -97,7 +97,7 @@ variable        zdim            equal      lz
 fix             boxlens all ave/time 1 {{ ti_steps // 2 }} {{ ti_steps // 2 }} v_xdim v_ydim v_zdim
 
 thermo          100
-thermo_style    custom step temp press density vol etotal econserve ke pe ecoul elong v_dUdL f_dUdL_avg v_lambda_c v_lambda_vdw
+thermo_style    custom step temp press density vol etotal econserve ke pe ecoul elong v_dUdL f_dUdL_avg v_lambda_c
 dump            1 all custom 1000 traj.lammpstrj id type xu yu zu
 dump_modify     1 sort id
 
@@ -114,4 +114,4 @@ change_box      all x final 0.0 ${avg_xdim} y final 0.0 ${avg_ydim} z final 0.0 
 ###             Save Restart               ###
 ##############################################
 
-write_restart   ti_vdw.restart
+write_data      {{ output_data }} nocoeff
