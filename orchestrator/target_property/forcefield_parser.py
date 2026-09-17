@@ -428,7 +428,7 @@ def write_coeff_lines(styles, coeffs, coeff_type, outfile):
             outfile.write(line + "\n")
 
 
-def write_all_coeffs(styles, coeffs, extra_coeff_lines=None, outfile=None):
+def write_parameter_file(styles, coeffs, extra_coeff_lines=None, outfile=None):
     """
     Write coefficient lines to `outfile` (a path).
 
@@ -1459,10 +1459,10 @@ def forcefield_merger(style_files,
 
     # Print coefficients
     if outparams:
-        write_all_coeffs(final_styles,
-                         final_coeffs,
-                         extra_coeff_lines,
-                         outfile=outparams)
+        write_parameter_file(final_styles,
+                             final_coeffs,
+                             extra_coeff_lines,
+                             outfile=outparams)
     if outstyle:
         write_style_file(final_styles, outfile=outstyle)
 
