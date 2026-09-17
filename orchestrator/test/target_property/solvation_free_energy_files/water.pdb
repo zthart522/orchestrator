@@ -1,0 +1,8 @@
+MODEL     1
+ATOM      1    O MOL     1       0.062   0.017  -0.018  1.00  0.00           O
+ATOM      2    H MOL     1      -0.228  -0.428   0.786  1.00  0.00           H
+ATOM      3    H MOL     1      -0.756   0.158  -0.507  1.00  0.00           H
+CONECT    1    2    3
+CONECT    2    1
+CONECT    3    1
+ENDMDL

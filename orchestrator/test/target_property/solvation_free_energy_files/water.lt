@@ -1,0 +1,48 @@
+# SPCFW WATER UPDATED MAY 15 2024
+# Verified Dec 11, 2024
+
+water{
+
+  write_once("In Init") {
+    bond_style harmonic
+    angle_style harmonic
+    pair_style hybrid/overlay/kk lj/cut/kk 11.0 coul/wolf/kk 0.2 11.0
+  }
+
+  write("Data Atoms") {
+    $atom:1     $mol:. @atom:1      -0.801022762 0.0619373105  0.0170170431 -0.0175809813      # O
+    $atom:2     $mol:. @atom:2      0.400548156  -0.227559302  -0.428087590 0.785818108       # H
+    $atom:3     $mol:. @atom:2      0.400474606  -0.755511165  0.157992676  -0.506772354       # H
+  }
+
+  write_once("In Settings") {
+    pair_coeff @atom:1 @atom:1 0.10200000 3.18800000
+    pair_coeff @atom:1 @atom:2 0.00000000 1.78549713
+    pair_coeff @atom:2 @atom:2 0.00000000 1.00000000
+  }
+
+  write_once("Data Masses") {
+    @atom:1    15.999
+    @atom:2    1.008
+  }
+
+  write("Data Bonds") {
+    $bond:1     @bond:1    $atom:1     $atom:2
+    $bond:2     @bond:1    $atom:1     $atom:3
+  }
+
+  write_once("In Settings") {
+    bond_coeff @bond:1 450.000	0.957
+  }
+
+  write("Data Angles") {
+    $angle:1     @angle:1    $atom:2     $atom:1     $atom:3
+  }
+
+  write_once("In Settings") {
+    angle_coeff @angle:1 55.000	104.520
+  }
+
+  write("Data Dihedrals") {
+  }
+}
