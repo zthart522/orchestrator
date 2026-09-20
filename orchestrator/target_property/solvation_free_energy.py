@@ -16,12 +16,11 @@ from ..storage import Storage
 from orchestrator.target_property.analysis import AnalyzeLammpsLog
 from ..utils.restart import restarter
 from .pack_molecules import (pack_system, read_lammps_data,
-                             make_molecule_unique)
-from .forcefield_parser import (
-    forcefield_merger,
-    write_parameter_file,
-    build_style_strings,
-)
+                             make_molecule_unique,
+                             make_charge_exclusive_atom_types)
+from .forcefield_parser import (forcefield_merger, write_parameter_file,
+                                build_style_strings,
+                                compute_cross_interactions)
 
 
 class SolvationFreeEnergy(TargetProperty):
@@ -109,17 +108,19 @@ class SolvationFreeEnergy(TargetProperty):
                 "alpha_vdw": 0.50,
                 "alpha_elec": 10
             },
-            "pair_modify": "none",
-            "special_bonds": "none",
-            "extra_pair_styles": None,
-            "extra_coeff_lines": None,
-            "pair_style": "none",
             "bond_style": "none",
             "angle_style": "none",
             "dihedral_style": "none",
             "improper_style": "none",
-            "kspace_modify": "none",
+            "pair_modify": "none",
             "kspace_style": "none",
+            "kspace_modify": "none",
+            "special_bonds": "none",
+            "extra_pair_styles": None,
+            "extra_coeff_lines": None,
+            "cross_pairstyle": None,
+            "override_cross_pairstyle": False,
+            "mixing_rule": "arithmetic",
             "temp": 298.15,
             "press": 1.0,
             "temp_damp": 100.0,
@@ -137,8 +138,6 @@ class SolvationFreeEnergy(TargetProperty):
 
         self.default_ti_params = {
             "free_energy": "gibbs",
-            "solute": "unknown",
-            "solvent": ["unknown"],
             "lambda_values": 11,
             "lambda_diff": 0.002,
             "equil_frac": 0.25
@@ -187,6 +186,7 @@ class SolvationFreeEnergy(TargetProperty):
                 else:
                     self.ti_job_details[k] = dict(job_details)
 
+        # Use default templates if none are passed
         self.input_template = input_template
         if self.input_template is None:
             source_file_location = os.path.dirname(os.path.abspath(__file__))
@@ -203,18 +203,25 @@ class SolvationFreeEnergy(TargetProperty):
                 f"{source_file_location}/solvation_ti_defaults/ti_vacuum.in"
             }
 
+        # Build simulator
         simulator_args = {'code_path': simulator_path, 'elements': []}
         self.built_simulator = simulator_builder.build(simulator_type,
                                                        simulator_args)
+
+        # Initialize checkpoint properties
+
+        # For multiple iterations
+        self.replicate = None
+        self.analysis_dirs = []
+        self.master_analysis_dir = None
 
         self.progress_flag = 'init'
         self.forcefield_path = None
         self.system_mode = None
         self.init_structure = None
-        self.analysis_dir = None
         self.min_structure = None
         self.equil_structure = None
-        self.elec_restart = None
+        self.uncharged_structure = None
         self.lambdas_to_run = {'ti_elec': [], 'ti_vdw': [], 'ti_vacuum': []}
         self.running_jobs = {'ti_elec': [], 'ti_vdw': [], 'ti_vacuum': []}
         self.finished_jobs = {'ti_elec': [], 'ti_vdw': [], 'ti_vacuum': []}
@@ -237,14 +244,16 @@ class SolvationFreeEnergy(TargetProperty):
         """
         save_dict = {
             self.checkpoint_name: {
+                'replicate': self.replicate,
                 'progress_flag': self.progress_flag,
                 'forcefield_path': self.forcefield_path,
                 'system_mode': self.system_mode,
                 'init_structure': self.init_structure,
                 'min_structure': self.min_structure,
                 'equil_structure': self.equil_structure,
-                'analysis_dir': self.analysis_dir,
-                'elec_restart': self.elec_restart,
+                'analysis_dirs': self.analysis_dirs,
+                'master_analysis_dir': self.master_analysis_dir,
+                'uncharged_structure': self.uncharged_structure,
                 'job_ids': self.job_ids,
                 'lambdas_to_run': self.lambdas_to_run,
                 'running_jobs': self.running_jobs,
@@ -271,7 +280,7 @@ class SolvationFreeEnergy(TargetProperty):
 
         if self.progress_flag != 'init':
             self.restart = True
-            self.logger.info('\tRestart data found (progress_flag='
+            self.logger.info('Restart data found (progress_flag='
                              f'{self.progress_flag}); will attempt to'
                              'resume from last checkpoint.')
         else:
@@ -279,8 +288,8 @@ class SolvationFreeEnergy(TargetProperty):
 
         # Save finished_jobs as the union of unique jobs found
         # in the analysis .json file and the restart file
-        if self.analysis_dir is not None:
-            manifest_path = os.path.join(self.analysis_dir,
+        if len(self.analysis_dirs) >= 1:
+            manifest_path = os.path.join(self.analysis_dirs[-1],
                                          "finished_jobs.json")
             try:
                 with open(manifest_path) as f:
@@ -315,7 +324,6 @@ class SolvationFreeEnergy(TargetProperty):
         system_params: dict,
         ti_params: dict,
         executables: Optional[Dict] = None,
-        iter_num: Optional[int] = 0,
         random_seed_use: Optional[bool] = False,
         max_submit: Optional[int] = None,
         user: Optional[str] = None,
@@ -354,8 +362,6 @@ class SolvationFreeEnergy(TargetProperty):
             moltemplate_cleanup are required.
             Possible keys: ``packmol``, ``moltemp``, ``moltemp_cleanup``
         :type executables: dict
-        :param iter_num: unique iteration number for running replicates
-        :type iter_num: int
         :param random_seed_use: option to use random seed in the simulation
         :type random_seed_use: boolean
         :param max_submit: maximum number of jobs to submit to queue
@@ -378,18 +384,21 @@ class SolvationFreeEnergy(TargetProperty):
         # ensure restart is properly read
         self.restart_property()
 
+        if self.replicate is None:
+            self.replicate = 0
+
         # Get default scheduler if one is not provided
         if scheduler is None:
             scheduler = self.default_scheduler
 
         # Make path for coefficient files to be generated, stored, & copied
         if self.forcefield_path is None:  # i.e. is a restart
-            self.forcefield_path = scheduler.make_path_base(
+            self.forcefield_path = scheduler.make_path(
                 self.__class__.__name__, f'{path_type}/ForceField')
 
         if self.init_structure is None:
-            system_dir = scheduler.make_path_base(self.__class__.__name__,
-                                                  f'{path_type}/InitSystem')
+            system_dir = scheduler.make_path(self.__class__.__name__,
+                                             f'{path_type}/InitSystem')
             self.init_structure = f'{system_dir}/system_packed.data'
 
         # Validate all inputs for phsyical constraints, override sim_params
@@ -468,7 +477,7 @@ class SolvationFreeEnergy(TargetProperty):
                 self.job_ids['equil'])
             equil_dir = os.path.realpath(
                 scheduler.get_job_path(self.job_ids['equil']))
-            self.equil_structure = f'{equil_dir}/npt_equil.data'
+            self.equil_structure = f'{equil_dir}/equilibrated.data'
             if not isfile(self.equil_structure) or job_status != 'done':
                 raise ValueError("Equilibration job finished unsuccessfully")
             self.progress_flag = 'equil_done'
@@ -480,19 +489,31 @@ class SolvationFreeEnergy(TargetProperty):
         equil_frac = ti_params.get("equil_frac")
         lambda_diff = ti_params.get('lambda_diff')
         sim_params['lambda_diff'] = lambda_diff
-        if self.restart is not True:
-            for leg in ('elec', 'vdw', 'vacuum'):
-                self.lambdas_to_run[f'ti_{leg}'] = list(lambda_values)
         self.checkpoint_property()
+
+        if self.progress_flag == 'equil_done':
+
+            # Check if lambdas_to_run have already been set
+            is_empty = True
+            for leg in ('elec', 'vdw', 'vacuum'):
+                if len(self.lambdas_to_run[f'ti_{leg}']) != 0:
+                    is_empty = False
+                    break
+
+            # If not, set them here for all legs
+            if is_empty is True:
+                for leg in ('elec', 'vdw', 'vacuum'):
+                    self.lambdas_to_run[f'ti_{leg}'] = list(lambda_values)
 
         self.logger.info(
             f'Starting TI w/ initial lambda array: {lambda_values}')
         self.logger.info(f'Using lambda_diff: {lambda_diff}')
 
         # Make analysis directory if one does not exist from failed run
-        if self.analysis_dir is None:
-            self.analysis_dir = scheduler.make_path_base(
-                self.__class__.__name__, f'{path_type}/Analysis/{iter_num}')
+        if not self.analysis_dirs:
+            analysis_dir = scheduler.make_path(self.__class__.__name__,
+                                               f'{path_type}/Analysis')
+            self.analysis_dirs.append(analysis_dir)
             self.checkpoint_property()
 
         # --- TI Electronic Jobs ---
@@ -500,12 +521,11 @@ class SolvationFreeEnergy(TargetProperty):
                                or self.running_jobs['ti_elec']):
             self.logger.info('Preparing & running electronic leg')
             sim_params['lambda_vdw'] = 1.00
-            self._run_ti('elec', iter_num, 'lambda_c', sim_params,
+            self._run_ti('elec', 'lambda_c', sim_params,
                          [param_file, charge_file, self.equil_structure],
-                         scheduler, f'{path_type}/ti_elec/{iter_num}',
-                         max_submit, user)
+                         scheduler, f'{path_type}/ti_elec', max_submit, user)
             scheduler.block_until_completed(self.job_ids['ti_elec'])
-            self.check_ti_jobs('elec', iter_num, equil_frac, scheduler)
+            self.check_ti_jobs('elec', equil_frac, scheduler)
             self.plot_leg_diagnostics('elec')
             self.progress_flag = 'ti_elec_done'
 
@@ -523,37 +543,36 @@ class SolvationFreeEnergy(TargetProperty):
 
         if vdw_remaining or vacuum_remaining:
             if charged_solute:
-                starting_structure = self.elec_restart
+                starting_structure = self.uncharged_structure
             else:
                 starting_structure = self.equil_structure
 
             self.logger.info('Preparing & running dispersion (VDW) leg')
             self.logger.info(f'Starting from structure: {starting_structure}')
             sim_params['lambda_c'] = 0.00
-            self._run_ti('vdw', iter_num, 'lambda_vdw', sim_params,
+            self._run_ti('vdw', 'lambda_vdw', sim_params,
                          [soft_param_file, charge_file, starting_structure],
-                         scheduler, f'{path_type}/ti_vdw/{iter_num}',
-                         max_submit, user)
+                         scheduler, f'{path_type}/ti_vdw', max_submit, user)
 
             if charged_solute:
                 self.logger.info('Preparing & running TI_VACUUM jobs')
                 sim_params['lambda_vdw'] = 1.00
-                self._run_ti('vacuum', iter_num, 'lambda_c', sim_params,
+                self._run_ti('vacuum', 'lambda_c', sim_params,
                              [param_file, charge_file, self.equil_structure],
-                             scheduler, f'{path_type}/ti_vacuum/{iter_num}',
-                             max_submit, user)
+                             scheduler, f'{path_type}/ti_vacuum', max_submit,
+                             user)
 
             combined_job_ids = list(self.job_ids['ti_vdw'])
             if charged_solute:
                 combined_job_ids += self.job_ids['ti_vacuum']
             scheduler.block_until_completed(combined_job_ids)
 
-            self.check_ti_jobs('vdw', iter_num, equil_frac, scheduler)
+            self.check_ti_jobs('vdw', equil_frac, scheduler)
             self.plot_leg_diagnostics('vdw')
             self.progress_flag = 'ti_vdw_done'
 
             if charged_solute:
-                self.check_ti_jobs('vacuum', iter_num, equil_frac, scheduler)
+                self.check_ti_jobs('vacuum', equil_frac, scheduler)
                 self.plot_leg_diagnostics('vacuum')
                 self.progress_flag = 'ti_vacuum_done'
             else:
@@ -561,57 +580,70 @@ class SolvationFreeEnergy(TargetProperty):
         self.checkpoint_property()
 
         # Analyze results of legs
-        if self.progress_flag in ('ti_vacuum_done', 'ti_vacuum_skip', 'done'):
-
+        if self.progress_flag in ('ti_vacuum_done', 'ti_vacuum_skip',
+                                  'ti_done'):
             equil_frac = ti_params.get("equil_frac")
-            dg_total = 0
-            stat_err_total = 0
+            free_energy = ti_params.get("free_energy")
 
-            legs = ('elec', 'vdw', 'vacuum')
-            fig, axes = plt.subplots(2,
-                                     len(legs),
-                                     figsize=(4 * len(legs), 6),
-                                     sharex='col')
+            (dg, stat) = self.analyze_leg_results(self.analysis_dirs[-1],
+                                                  "results_summary.dat",
+                                                  free_energy)
 
-            leg_data = {}
-            for col, leg in enumerate(legs):
-                leg_data[leg] = {}
-
-                results_file = f'{self.analysis_dir}/results_{leg}.dat'
-                lams, lens, dudl, dudl_std, dudl_err = \
-                    self._read_results_file(results_file)
-
-                # Integrate dudl for each leg
-                dg_leg, stat_err = self.compute_integral(lams, dudl, dudl_err)
-                if leg in ("vdw", "elec"):
-                    dg_total += dg_leg
-                else:
-                    dg_total -= dg_leg
-                stat_err_total += stat_err**2
-
-                self.plot_leg_diagnostics(leg)
-
-                print("=" * 75 + '\n',
-                      f"dF ({leg}) = {dg_leg:.4f} +/- {stat_err:.4f}\n",
-                      "=" * 75 + '\n\n')
-
-            stat_err_total = np.sqrt(stat_err_total)
-            self.plot_dudl_vs_lambda(self.analysis_dir)
-
-            print(
-                "=" * 75 + '\n', f"{ti_params.get('free_energy').upper()} "
-                f"FREE ENERGY = {dg_total:.4f} +/- {stat_err_total:.4f}\n",
-                "=" * 75 + '\n\n')
-
-            self.progress_flag = 'done'
+            self.progress_flag = 'ti_done'
             self.checkpoint_property()
 
             return {
-                'property_value': dg_total,
-                'property_std': stat_err_total,
-                'calc_ids': self.job_ids,
+                'property_value': dg,
+                'property_std': stat,
                 'success': True
             }
+
+    def analyze_leg_results(self, analysis_dir, filename, free_energy):
+        """
+        Integrate each TI leg, combine them into the total free energy, and
+        write a summary report to ``filename`` inside ``analysis_dir``.
+
+        :returns: (dg_total, stat_err_total)
+        """
+        sep = "=" * 75
+        dg_total = 0.0
+        var_total = 0.0
+        lines = []
+
+        for leg in ('elec', 'vdw', 'vacuum'):
+            results_file = f'{analysis_dir}/results_{leg}.dat'
+            lams, lens, dudl, dudl_std, dudl_err = \
+                self._read_results_file(results_file)
+            dg_leg, stat_err = self.compute_integral(lams, dudl, dudl_err)
+
+            if leg in ("vdw", "elec"):
+                dg_total += dg_leg
+            else:
+                dg_total -= dg_leg
+            var_total += stat_err**2
+
+            if os.path.isfile(os.path.join(analysis_dir,
+                                           'finished_jobs.json')):
+                self.plot_leg_diagnostics(leg)
+
+            lines += [
+                sep, f" dF ({leg}) = {dg_leg:.4f} +/- {stat_err:.4f}", sep, ""
+            ]
+
+        stat_err_total = np.sqrt(var_total)
+        self.plot_dudl_vs_lambda(analysis_dir)
+
+        lines += [
+            sep, f" {free_energy.upper()} FREE ENERGY = "
+            f"{dg_total:.4f} +/- {stat_err_total:.4f}", sep, ""
+        ]
+
+        report_path = os.path.join(analysis_dir, filename)
+        with open(report_path, "w") as f:
+            f.write("\n".join(lines))
+        self.logger.info(f"Wrote free energy summary to {report_path}")
+
+        return dg_total, stat_err_total
 
     def _conduct_sim(self,
                      sim_params: Dict[str, Any],
@@ -660,28 +692,22 @@ class SolvationFreeEnergy(TargetProperty):
 
         return calc_id
 
-    def _run_ti(self, leg, iter_num, lambda_parameter, sim_params, sim_files,
-                scheduler, sim_path, max_submit, user):
+    def _run_ti(self, leg, lambda_parameter, sim_params, sim_files, scheduler,
+                sim_path, max_submit, user):
         """
         Run a single TI leg (``elec``, ``vdw``, or ``vacuum``) at the lambda
         values that correspoind to those in the self.lambdas_to_run dictionary.
         Per leg results are written to results_<leg>.dat, using the timeseries
         equilibration cutoff passed in sim_params (see below for details).
 
-        For lambda values with a matching entry in self.finished_jobs (i.e.
-        already run in a prior iter_num), the corresponding .data file is
-        used to restart that lambda window rather than starting from
-        sim_params['input_data']. For the ``vdw`` leg, if no restart data
-        file is found for a given lambda and self.elec_restart is set, jobs
-        are instead started from self.elec_restart. As each job is
-        submitted, its lambda is removed from self.lambdas_to_run and it is
-        appended to self.running_jobs; the checkpoint is written after each
-        submission.
+        For the ``vdw`` leg, if no restart data file is found for a given
+        lambda and self.uncharged_structure is set, jobs are instead started
+        from self.uncharged_structure. As each job is submitted, its lambda
+        is removed from self.lambdas_to_run and it is appended to
+        self.running_jobs; the checkpoint is written after each submission.
 
         :param leg: TI leg that is being run: ``elec``, ``vdw``, or ``vacuum``
         :type leg: str
-        :param iter_num: unique number for running replicates
-        :type iter_num: int
         :param lambda_parameter: the sim_params key set to the current
             lambda value for each job. This should be ``lambda_vdw``
             for ti_vdw jobs and ``lambda_c`` for ti_elec and ti_vacuum.
@@ -708,15 +734,6 @@ class SolvationFreeEnergy(TargetProperty):
                 f"leg must be 'elec', 'vdw', or 'vacuum', got {leg!r}")
         sim_type = f'ti_{leg}'
 
-        # Create lambda -> old iter_num mapping, overriding with newest
-        # lambda runs for duplicates
-        restart_datafile = {}
-        for job in self.finished_jobs[f'ti_{leg}']:
-            if job['lambda'] in self.lambdas_to_run[f'ti_{leg}']:
-                restart_datafile[job['lambda']] = (
-                    f"{job['job_path']}/ti_{leg}_"
-                    f"{job['lambda']:.5f}_{job['iter_num']:03d}.data")
-
         self.logger.info(
             f"[{sim_type}]: running "
             f"{len(self.lambdas_to_run[f'ti_{leg}'])} lambda window(s): "
@@ -727,19 +744,15 @@ class SolvationFreeEnergy(TargetProperty):
             job_sim_params = copy.deepcopy(sim_params)
             job_sim_files = list(sim_files)
             job_sim_params[lambda_parameter] = lam
-            if lam not in restart_datafile.keys():
-                job_sim_params['input_data'] = 'npt_equil.data'
-                if leg == 'vdw' and self.elec_restart is not None:
-                    job_sim_params['input_data'] = os.path.basename(
-                        self.elec_restart)
-                    job_sim_files.append(self.elec_restart)
-            else:
-                df = restart_datafile[lam]
-                job_sim_params['input_data'] = os.path.basename(df)
-                job_sim_files.append(df)
 
-            job_sim_params[
-                'output_data'] = f'ti_{leg}_{lam:.5f}_{iter_num:03d}.data'
+            job_sim_params['input_data'] = 'equilibrated.data'
+            if leg == 'vdw' and self.uncharged_structure is not None:
+                job_sim_params['input_data'] = os.path.basename(
+                    self.uncharged_structure)
+                job_sim_files.append(self.uncharged_structure)
+
+            job_sim_params['output_data'] = \
+                f'ti_{leg}_{lam:.5f}_{self.replicate:03d}.data'
             if (leg == 'vacuum' and lam == 0.0):
                 job_sim_params['kspace_modify'] = 'gewald 0.01'
             job_id = self._conduct_sim(job_sim_params, job_sim_files,
@@ -749,7 +762,6 @@ class SolvationFreeEnergy(TargetProperty):
             job_path = scheduler.get_job_path(job_id)
             self.lambdas_to_run[f'ti_{leg}'].remove(lam)
             self.running_jobs[f'ti_{leg}'].append({
-                "iter_num": iter_num,
                 "lambda": lam,
                 "job_id": job_id,
                 "job_path": job_path
@@ -758,7 +770,7 @@ class SolvationFreeEnergy(TargetProperty):
             self.checkpoint_property()
             sleep(5)
 
-    def check_ti_jobs(self, leg, iter_num, equil_frac, scheduler):
+    def check_ti_jobs(self, leg, equil_frac, scheduler):
         """
         Check whether TI jobs have finished, collect statistics from finished
         jobs, update results files with equilibrium stats, and move jobs
@@ -766,8 +778,6 @@ class SolvationFreeEnergy(TargetProperty):
 
         :param leg: TI leg that is being run: ``elec``, ``vdw``, or ``vacuum``
         :type leg: str
-        :param iter_num: unique number for running replicates
-        :type iter_num: int
         :param equil_frac: fraction of the time series to discard as
         equilibration. default values is 0.25, discarding first 25 percent.
         :type equil_frac: float
@@ -776,13 +786,9 @@ class SolvationFreeEnergy(TargetProperty):
         """
         newly_completed = []
         for job in self.running_jobs[f'ti_{leg}']:
-            job_iter = job['iter_num']
             lam = job['lambda']
             job_id = job['job_id']
             job_path = job['job_path']
-
-            if job_iter != iter_num:
-                continue
             job_status = scheduler.check_completed_job_status(job_id)
             if job_status != 'done':
                 self.logger.warning(
@@ -791,8 +797,9 @@ class SolvationFreeEnergy(TargetProperty):
                     'next restart')
                 continue
             if leg == 'elec' and lam == 0.0:
-                outfile = f"{job_path}/ti_elec_0.00000_{iter_num:03d}.data"
-                self.elec_restart = outfile
+                outfile = \
+                    f"{job_path}/ti_elec_0.00000_{self.replicate:03d}.data"
+                self.uncharged_structure = outfile
             newly_completed.append(job)
 
         # Move running jobs to finished jobs
@@ -819,16 +826,27 @@ class SolvationFreeEnergy(TargetProperty):
         # Write results to lastest analysis_dir
         lams, lens, dudl, dudl_std, dudl_err = self._write_results_file(
             lambda_values, lens, dudl, dudl_std, dudl_err,
-            f'{self.analysis_dir}/results_{leg}.dat')
+            f'{self.analysis_dirs[-1]}/results_{leg}.dat')
 
         return None
 
     def calculate_with_error(
-        self,
-        n_calc: int,
-        modified_params: Optional[Dict[str, Any]] = None,
-        scheduler: Optional[Scheduler] = None,
-    ):
+            self,
+            path_type: str,
+            sim_params: dict,
+            system_params: dict,
+            ti_params: dict,
+            n_calc: int,
+            executables: Optional[Dict] = None,
+            random_seed_use: Optional[bool] = False,
+            max_submit: Optional[int] = None,
+            user: Optional[str] = None,
+            accelerator: Optional[str] = None,
+            scheduler: Optional[Scheduler] = None,
+            storage: Optional[Storage] = None,  # CURRENTLY NOT IMPLEMENTED
+            modified_params: Optional[Dict[
+                str, Any]] = None,  # CURRENTLY NOT IMPLEMENTED
+            **kwargs):
         """
         Calculate a target property with mean and standard deviation
         Derived classes should list explicit arguments required
@@ -843,8 +861,123 @@ class SolvationFreeEnergy(TargetProperty):
         :type scheduler: Scheduler
         :returns: mean and standard deviation of the calculated property
         """
-        raise NotImplementedError("To accumulate stats, run compute_property()"
-                                  " multiple times")
+
+        sim_params, system_params, ti_params = self._validate_inputs(
+            sim_params, system_params, ti_params, executables)
+
+        if self.replicate is None:
+            self.replicate = 0
+
+        if self.master_analysis_dir is None:
+            self.master_analysis_dir = \
+                scheduler.make_path(self.__class__.__name__,
+                                    f'{path_type}/MasterAnalysis')
+
+        while True:
+
+            if self.progress_flag in ('init', 'min_done', 'equil_done',
+                                      'ti_elec_done', 'ti_elec_skip',
+                                      'ti_vdw_done', 'ti_vacuum_done',
+                                      'ti_vacuum_skip'):
+
+                # Run TI calculation
+                self.calculate_property(
+                    path_type=path_type,
+                    sim_params=sim_params,
+                    system_params=system_params,
+                    ti_params=ti_params,
+                    executables=executables,
+                    random_seed_use=True,
+                    max_submit=max_submit,
+                    user=user,
+                    accelerator=accelerator,
+                    scheduler=scheduler,
+                    storage=storage  # CURRENTLY NOT IMPLEMENTED
+                )
+
+            # Combine analysis of all prior iterations
+            if self.progress_flag == 'ti_done':
+                for leg in ('elec', 'vdw', 'vacuum'):
+                    result_file = f'{self.analysis_dirs[-1]}/results_{leg}.dat'
+                    lams, lens, dudl, dudl_std, dudl_err = \
+                        self._read_results_file(result_file)
+                    dir = self.master_analysis_dir
+                    if self.replicate != 0:
+                        shutil.copy(
+                            f'{dir}/results_{leg}_{self.replicate - 1}.dat',
+                            f'{dir}/results_{leg}_{self.replicate}.dat')
+                    lams, lens, dudl, dudl_std, dudl_err = \
+                        self._write_results_file(
+                            lams, lens, dudl, dudl_std, dudl_err,
+                            f'{dir}/results_{leg}_{self.replicate}.dat'
+                        )
+                self.progress_flag = 'iter_merged'
+                self.checkpoint_property()
+
+            if self.progress_flag == 'iter_merged':
+
+                # Reset per-iteration properties
+                self.progress_flag = 'init'
+                self.forcefield_path = None
+                self.system_mode = None
+                self.init_structure = None
+                self.analysis_dirs[-1] = None
+                self.min_structure = None
+                self.equil_structure = None
+                self.uncharged_structure = None
+                self.lambdas_to_run = {
+                    'ti_elec': [],
+                    'ti_vdw': [],
+                    'ti_vacuum': []
+                }
+                self.running_jobs = {
+                    'ti_elec': [],
+                    'ti_vdw': [],
+                    'ti_vacuum': []
+                }
+                self.finished_jobs = {
+                    'ti_elec': [],
+                    'ti_vdw': [],
+                    'ti_vacuum': []
+                }
+                self.job_ids = {
+                    'min': [],
+                    'equil': [],
+                    'ti_elec': [],
+                    'ti_vdw': [],
+                    'ti_vacuum': []
+                }
+
+                # Keep iterating, self.replicate has not reached n_calc - 1
+                if self.replicate != n_calc - 1:
+                    self.replicate += 1
+                    self.progress_flag == 'init'
+                else:
+                    self.progress_flag = 'iter_done'
+                self.checkpoint_property()
+
+            if self.progress_flag == 'iter_done':
+                break
+
+        if self.progress_flag == 'iter_done':
+
+            # Combine all finished jobs into single .json file
+            self._merge_finished_jobs(self.analysis_dirs,
+                                      self.master_analysis_dir)
+
+            # Copy last iteration of results_<leg>_<replicate>.dat files
+            for leg in ('elec', 'vdw', 'vacuum'):
+                dir = self.master_analysis_dir
+                shutil.copy(f'{dir}/results_{leg}_{self.replicate}.dat',
+                            f'{dir}/results_{leg}.dat')
+
+            free_energy = ti_params.get("free_energy")
+            (dg, stat) = self.analyze_leg_results(self.analysis_dirs[-1],
+                                                  "results_summary.dat",
+                                                  free_energy)
+            self.plot_dudl_vs_lambda(self.master_analysis_dir)
+
+        return {'property_value': dg, 'property_std': stat, 'success': True}
 
     def add_accelerator_flags(self, sim_params, provided_acc):
         """
@@ -882,12 +1015,10 @@ class SolvationFreeEnergy(TargetProperty):
             for part in value.split():
                 if part.endswith('/kk'):
                     self.logger.info('Found /kk suffix -> using -k on -sf kk')
-                    self.built_simulator.code_path += ' -k on -sf kk'
                     found_acc = 'kk'
                     break
                 elif part.endswith('/omp'):
                     self.logger.info('Found /omp suffix -> using -sf omp')
-                    self.built_simulator.code_path += ' -sf omp'
                     found_acc = 'omp'
                     break
             if found_acc is not False:
@@ -908,48 +1039,52 @@ class SolvationFreeEnergy(TargetProperty):
 
     def plot_dudl_vs_lambda(self, analysis_dir):
         """
-        Plot <dU/dλ> as a function of lambda values for each thermodynamic
-        integration leg. This requires that results are already accumulated
-        into a results_<leg>.dat file via _write_results_file().
+        Plot <dU/dλ> as a function of lambda for each thermodynamic
+        integration leg, one panel per leg. This requires that results are
+        already accumulated into a results_<leg>.dat file via
+        _write_results_file().
 
-        :param analysis_dir: dictory where results_<leg>.dat files live
+        :param analysis_dir: directory where results_<leg>.dat files live
         :type analysis_dir: str
         """
-        lam_elec, _, du_elec, _, se_elec = \
-            self._read_results_file(f'{analysis_dir}/results_elec.dat')
-        lam_vdw, _, du_vdw, _, se_vdw = \
-            self._read_results_file(f'{analysis_dir}/results_vdw.dat')
-        lam_vac, _, du_vac, _, se_vac = \
-            self._read_results_file(f'{analysis_dir}/results_vacuum.dat')
+        legs = [
+            ("elec", "blue"),
+            ("vdw", "red"),
+            ("vacuum", "black"),
+        ]
 
-        fig, ax = plt.subplots()
-        if len(lam_elec) > 0:
-            ax.errorbar(lam_elec,
-                        du_elec,
-                        yerr=se_elec,
-                        label='elec',
-                        marker='o',
-                        color='blue')
-        if len(lam_vdw) > 0:
-            ax.errorbar(lam_vdw,
-                        du_vdw,
-                        yerr=se_vdw,
-                        label='vdw',
-                        marker='o',
-                        color='red')
-        if len(lam_vac) > 0:
-            ax.errorbar(lam_vac,
-                        du_vac,
-                        yerr=se_vac,
-                        label='vacuum',
-                        marker='o',
-                        color='black')
+        fig, axes = plt.subplots(1,
+                                 len(legs),
+                                 figsize=(4.5 * len(legs), 4),
+                                 sharex=True)
 
-        ax.set_xlabel(r'$\lambda$')
-        ax.set_ylabel(r'dU/d$\lambda$')
-        ax.legend()
+        for ax, (leg, color) in zip(axes, legs):
+            lam, _, du, _, se = self._read_results_file(
+                f'{analysis_dir}/results_{leg}.dat')
+
+            if len(lam) > 0:
+                ax.errorbar(lam,
+                            du,
+                            yerr=se,
+                            marker='o',
+                            color=color,
+                            capsize=2)
+            else:
+                ax.text(0.5,
+                        0.5,
+                        "no data",
+                        ha='center',
+                        va='center',
+                        transform=ax.transAxes)
+
+            ax.set_title(leg)
+            ax.set_xlabel(r'$\lambda$')
+            ax.set_xlim(-0.02, 1.02)
+            ax.grid(alpha=0.3)
+
+        axes[0].set_ylabel(r'dU/d$\lambda$')
+
         fig.tight_layout()
-
         fig.savefig(f'{analysis_dir}/dudl_vs_lambda.png', dpi=300)
         plt.close(fig)
 
@@ -964,7 +1099,8 @@ class SolvationFreeEnergy(TargetProperty):
         """
 
         # Load jobs from analysis directory
-        with open(os.path.join(self.analysis_dir, "finished_jobs.json")) as f:
+        with open(os.path.join(self.analysis_dirs[-1],
+                               "finished_jobs.json")) as f:
             finished_jobs = json.load(f)
         jobs = finished_jobs[f'ti_{leg}']
         lambdas = [job['lambda'] for job in jobs]
@@ -1013,10 +1149,10 @@ class SolvationFreeEnergy(TargetProperty):
         fig_ts.tight_layout()
         fig_hist.tight_layout()
 
-        fig_ts.savefig(f'{self.analysis_dir}/ti_{leg}_timeseries.png',
+        fig_ts.savefig(f'{self.analysis_dirs[-1]}/ti_{leg}_timeseries.png',
                        dpi=300,
                        bbox_inches='tight')
-        fig_hist.savefig(f'{self.analysis_dir}/ti_{leg}_histograms.png',
+        fig_hist.savefig(f'{self.analysis_dirs[-1]}/ti_{leg}_histograms.png',
                          dpi=300,
                          bbox_inches='tight')
         plt.close(fig_ts)
@@ -1063,6 +1199,9 @@ class SolvationFreeEnergy(TargetProperty):
         atom_style = sim_params.get('atom_style')
         extra_pair_styles = sim_params.get("extra_pair_styles")
         extra_coeff_lines = sim_params.get("extra_coeff_lines")
+        cross_ps = sim_params.get("cross_pairstyle")
+        override_cross = sim_params.get("override_cross_pairstyle")
+        mixing_rule = sim_params.get("mixing_rule")
 
         if self.system_mode == "pack":
 
@@ -1075,49 +1214,40 @@ class SolvationFreeEnergy(TargetProperty):
             mt_dir = self._run_moltemplate_pass(molecule_list, executables,
                                                 scheduler, path_type)
 
-            # Build solvent-only forcefield
-            self.logger.info('Building solvent-only forcefield')
-            solvent_styles, solvent_coeffs, solvent_reduced_names = \
-                self._build_solvent_forcefield(
-                    solvent_params, mt_dir, atom_style, extra_pair_styles,
+            # Build solvent-solute combined forcefield
+            self.logger.info('Building combined forcefield')
+            styles, coeffs, reduced_names = \
+                self._build_combined_forcefield(
+                    molecule_list, mt_dir, atom_style, extra_pair_styles,
                     extra_coeff_lines)
 
-            # Merge with solute forcefield
-            self.logger.info(
-                'Merging solvent forcefield with solute forcefield')
-            styles, coeffs, reduced_names = self._build_solute_forcefield(
-                solute_params, mt_dir, solvent_styles, solvent_reduced_names,
-                atom_style, sim_params, extra_pair_styles, extra_coeff_lines)
-
-            style_strings = build_style_strings(styles)
-            save_params = {**save_params, **style_strings}
-
+            # Pack system with reduced datafiles (i.e. new types, where needed)
             self.logger.info('Packing solvated system')
-            pack_result = self._pack_solute_solvent_system(
-                system_dir, molecule_list, reduced_names, system_params,
-                atom_style, executables, random_seed_use)
+            self._pack_solute_solvent_system(system_dir, molecule_list,
+                                             reduced_names, system_params,
+                                             atom_style, executables,
+                                             random_seed_use)
 
-            solute_types = pack_result["solute_types"]
-            solvent_types = pack_result["solvent_types"]
-            all_charges = pack_result["all_charges"]
+            # Read packed system
+            construction, topology, box = \
+                read_lammps_data(f'{system_dir}/system_packed.data',
+                                 atom_style=atom_style)
 
-            save_params["solute_molecule_id"] = 1
+            # Solute_id always 1 due to how molecule_list is built
+            solute_id = 1
 
         elif self.system_mode == "prepared":
 
             self.logger.info('SYSTEM MODE = Prepared')
 
             solute_id = system_params.get('solute_molecule_id')
-            save_params["solute_molecule_id"] = solute_id
 
             style_file = system_params.get('style_file')
             param_file = system_params.get('param_file')
             data_file = system_params.get('data_file')
 
-            # Read forcefield from passed inputs
+            # Read forcefield from passed inputs, mostly to reduce the FF
             self.logger.info('Reading prepared forcefield')
-            cross_ps = sim_params.get("cross_pairstyle")
-            override_cross = sim_params.get("override_cross_pairstyle")
             styles, coeffs, datafiles = forcefield_merger(
                 style_files=style_file,
                 params_files=param_file,
@@ -1125,7 +1255,7 @@ class SolvationFreeEnergy(TargetProperty):
                 atom_style=atom_style,
                 extra_pair_styles=extra_pair_styles,
                 extra_coeff_lines=extra_coeff_lines,
-                mixing_rule="arithmetic",
+                mixing_rule=mixing_rule,
                 cross_pairstyle=cross_ps,
                 override_cross_ps=override_cross,
                 stack_ff=False,
@@ -1136,47 +1266,71 @@ class SolvationFreeEnergy(TargetProperty):
             construction, topology, box = read_lammps_data(
                 datafiles[0], atom_style=atom_style)
 
-            # Make solute_molecule_id into unique type in .data file
+        # Save solute_molecule_id
+        save_params["solute_molecule_id"] = solute_id
+
+        # Make solute_molecule_id into unique type in .data file
+        self.logger.info(
+            'Reconfiguring .data file so solute atom types are unique')
+        costruction, topology, mapping = make_molecule_unique(
+            construction=construction,
+            topology=topology,
+            target_mol_id=solute_id,
+            filepath=f'{system_dir}/system_packed.data',
+            box=box,
+            atom_style=atom_style)
+
+        # Change coeffs appropriately, then write to new parameter file
+        if mapping:
             self.logger.info(
-                'Reconfiguring .data file so solute atom types are unique')
-            costruction, topology, mapping = make_molecule_unique(
+                'Altering _coeff parameters to account for new types')
+            coeffs["pair"] = self._clone_pair_coefficients(coeffs, mapping)
+
+        # Make sure each type in solvent has unique charges
+        construction, topology, mapping, solute_charges, all_charges = \
+            make_charge_exclusive_atom_types(
                 construction=construction,
                 topology=topology,
                 target_mol_id=solute_id,
                 filepath=f'{system_dir}/system_packed.data',
                 box=box,
-                atom_style=atom_style)
+                atom_style=atom_style
+            )
+        all_types = list(all_charges.keys())
+        solute_types = list(solute_charges.keys())
+        solvent_types = [t for t in all_types if t not in set(solute_types)]
 
+        # Change coeffs appropriately, then write to new parameter file
+        if mapping:
             self.logger.info(
                 'Altering _coeff parameters to account for new types')
             coeffs["pair"] = self._clone_pair_coefficients(coeffs, mapping)
-            write_parameter_file(
-                styles=styles,
-                coeffs=coeffs,
-                extra_coeff_lines=extra_coeff_lines,
-                outfile=f'{self.forcefield_path}/system_packed.in.settings')
 
-            style_strings = build_style_strings(styles)
-            save_params = {**save_params, **style_strings}
+        # Compute cross-terms (skips pre-defined cross terms)
+        styles, coeffs = compute_cross_interactions(styles=styles,
+                                                    coeffs=coeffs,
+                                                    mixing_rule=mixing_rule,
+                                                    cross_pairstyle=cross_ps,
+                                                    override_ps=override_cross)
 
-            self.logger.info('Re-reading solute, solvent types & charges')
-            solvent_types, solute_types, all_types, all_charges = \
-                self._parse_types_and_charges_from_data(
-                    f"{self.init_structure}",
-                    solute_id,
-                    atom_style,
-                    self.logger)
+        write_parameter_file(
+            styles=styles,
+            coeffs=coeffs,
+            extra_coeff_lines=extra_coeff_lines,
+            outfile=f'{self.forcefield_path}/system_packed.in.settings')
 
-        # Regardless of mode, these are needed
-        has_charges = any(abs(q) > 0.01 for q in all_charges.values())
-        charged_solute = has_charges and any(
-            abs(all_charges[s]) > 0.01 for s in solute_types)
+        # Build style lines
+        style_strings = build_style_strings(styles)
+        save_params = {**save_params, **style_strings}
+
+        # Check if system/solute is charged
+        charged_solute = any(
+            abs(solute_charges[s]) > 0.01 for s in solute_charges)
         save_params['charged_solute'] = charged_solute
 
         charge_file = f'{self.forcefield_path}/system_packed.in.charges'
         self.logger.info(f'Writing charge file: {charge_file}')
-        self._write_charge_file(sorted(set(solute_types + solvent_types)),
-                                all_charges, charge_file)
+        self._write_charge_file(all_charges, charge_file)
 
         self.logger.info(
             'Altering forcefield parameters to include soft pairstyles')
@@ -1195,7 +1349,7 @@ class SolvationFreeEnergy(TargetProperty):
         self.logger.info('Building FEP purturbation lines')
         fep_lines = self.build_soft_fep_lines(coeffs, solvent_types,
                                               solute_types)
-        charge_lines = self._build_charge_modify(solute_types, all_charges)
+        charge_lines = self._build_charge_modify(solute_charges)
 
         save_params = {**save_params, **fep_lines}
         save_params = {**save_params, **charge_lines}
@@ -1231,21 +1385,23 @@ class SolvationFreeEnergy(TargetProperty):
         Duplicate pair coefficients so that any new (mapped) atom type
         inherits the coefficients of the original type it was split from.
         """
+        children = {}
+        for new_t, old_t in mapping.items():
+            children.setdefault(old_t, []).append(new_t)
+
         new_pair = {}
         for old_i, row in coeffs["pair"].items():
             for old_j, coeff in row.items():
                 substyle, parts = coeff
-                i_variants = [old_i] + ([mapping[old_i]]
-                                        if old_i in mapping else [])
-                j_variants = [old_j] + ([mapping[old_j]]
-                                        if old_j in mapping else [])
+                i_variants = [old_i] + children.get(old_i, [])
+                j_variants = [old_j] + children.get(old_j, [])
 
                 for i in i_variants:
                     for j in j_variants:
                         new_i, new_j = min(i, j), max(i, j)
                         new_parts = list(parts)
-                        new_parts[1] = str(i)
-                        new_parts[2] = str(j)
+                        new_parts[1] = str(new_i)
+                        new_parts[2] = str(new_j)
                         new_pair.setdefault(new_i,
                                             {})[new_j] = (substyle, new_parts)
 
@@ -1297,8 +1453,8 @@ class SolvationFreeEnergy(TargetProperty):
                 continue
 
             if mt_dir is None:
-                mt_dir = scheduler.make_path_base(self.__class__.__name__,
-                                                  f'{path_type}/Moltemplate')
+                mt_dir = scheduler.make_path(self.__class__.__name__,
+                                             f'{path_type}/Moltemplate')
                 mt_exe = executables.get('moltemp')
                 mt_clean_exe = executables.get('moltemp_cleanup')
 
@@ -1318,8 +1474,8 @@ class SolvationFreeEnergy(TargetProperty):
 
         return mt_dir
 
-    def _build_solvent_forcefield(self, solvent_params, mt_dir, atom_style,
-                                  extra_pair_styles, extra_coeff_lines):
+    def _build_combined_forcefield(self, molecule_params, mt_dir, atom_style,
+                                   extra_pair_styles, extra_coeff_lines):
         """
         Build the merged forcefield for all solvent molecules, grouping
         molecules that share the same forcefield.
@@ -1354,14 +1510,19 @@ class SolvationFreeEnergy(TargetProperty):
         :rtype: tuple
         """
         unique_forcefields = {}
-
-        for m in solvent_params:
+        for m in molecule_params:
             ff_mode = m.get('ff_mode')
             forcefield = m.get('forcefield')
             structure = m.get('structure')
 
-            if forcefield in unique_forcefields:
-                unique_forcefields[forcefield]["data_files"].append(structure)
+            matched_key = None
+            for ff in unique_forcefields:
+                if os.path.samefile(forcefield, ff):
+                    matched_key = ff
+                    break
+
+            if matched_key is not None:
+                unique_forcefields[matched_key]["data_files"].append(structure)
                 continue
 
             if ff_mode.lower() == "radonpy":
@@ -1396,117 +1557,24 @@ class SolvationFreeEnergy(TargetProperty):
                 "data_files": data_files
             }
 
-        solvent_data_files = [
+        data_files = [
             tuple(ff["data_files"]) for ff in unique_forcefields.values()
         ]
-        solvent_style_files = [
-            ff["style_files"] for ff in unique_forcefields.values()
-        ]
-        solvent_params_files = [
+        style_files = [ff["style_files"] for ff in unique_forcefields.values()]
+        params_files = [
             tuple(ff["params_files"]) for ff in unique_forcefields.values()
         ]
 
         return forcefield_merger(
-            style_files=solvent_style_files,
-            params_files=solvent_params_files,
-            data_files=solvent_data_files,
+            style_files=style_files,
+            params_files=params_files,
+            data_files=data_files,
             atom_style=atom_style,
             extra_pair_styles=extra_pair_styles,
             extra_coeff_lines=extra_coeff_lines,
             stack_ff=False,
-            outparams=f"{self.forcefield_path}/solvent.in.settings",
-            outstyle=f"{self.forcefield_path}/solvent.in.init")
-
-    def _build_solute_forcefield(self, solute_params, mt_dir, solvent_styles,
-                                 solvent_reduced_names, atom_style, sim_params,
-                                 extra_pair_styles, extra_coeff_lines):
-        """
-        Get the solute's forcefield files and merge them with the already-built
-        solvent forcefield, forcing the solute to remain unique (stack_ff=True)
-
-        Style/parameter/data files for the solute are resolved based on its
-        ``ff_mode`` (``radonpy`` or ``moltemplate``) and merged, via
-        ``forcefield_merger``, with the previously written solvent forcefield
-        (``solvent.in.init`` / ``solvent.in.settings``) using arithmetic
-        mixing rules. The cross pair style for solute-solvent interactions is
-        taken from ``sim_params["cross_pairstyle"]`` if provided, otherwise
-        defaults to the last solvent pair style. The merged result is written
-        to ``system_packed.in.settings`` and ``system_packed.in.init`` under
-        ``self.forcefield_path``.
-
-        :param solute_params: Solute molecule dictionary, including
-            ``ff_mode``, ``forcefield``, ``structure``, and (for
-            ``ff_mode="moltemplate"``) ``base_name``.
-        :type solute_params: dict
-        :param mt_dir: Moltemplate working directory containing generated
-            ``.in.init``/``.in.settings`` files, used when the solute's
-            ``ff_mode`` is ``moltemplate``.
-        :type mt_dir: str
-        :param solvent_styles: Merged solvent style dictionary (as returned by
-            ``_build_solvent_forcefield``), used to determine the default
-            cross pair style.
-        :type solvent_styles: dict
-        :param solvent_reduced_names: Reduced solvent data file names/paths
-            (as returned by ``_build_solvent_forcefield``) to merge against.
-        :type solvent_reduced_names: list
-        :param atom_style: LAMMPS atom style to use when merging forcefields.
-        :type atom_style: str
-        :param sim_params: Simulation parameters, used to look up
-            ``cross_pairstyle`` and ``override_cross_pairstyle`` overrides.
-        :type sim_params: dict
-        :param extra_pair_styles: Additional pair styles to include in the
-            merged forcefield.
-        :type extra_pair_styles: list
-        :param extra_coeff_lines: Additional coefficient lines to include in
-            the merged forcefield.
-        :type extra_coeff_lines: list
-
-        :returns: The ``(styles, coeffs, reduced_names)`` tuple produced by
-            ``forcefield_merger`` for the merged solute/solvent forcefield.
-        :rtype: tuple
-        """
-        ff_mode = solute_params.get('ff_mode')
-        forcefield = solute_params.get('forcefield')
-        structure = solute_params.get('structure')
-
-        if ff_mode.lower() == "radonpy":
-            solute_styles_file = f"{forcefield}/lammps_forcefield_style.lmp"
-            solute_params_file = tuple(
-                self.parse_paramslist_file(
-                    f"{forcefield}/lammps_forcefield_paramlist.lmp"))
-            solute_data_file = tuple([structure])
-        elif ff_mode.lower() == "moltemplate":
-            base_name = solute_params.get("base_name")
-            solute_styles_file = f"{mt_dir}/{base_name}.in.init"
-            solute_params_file = tuple([f"{mt_dir}/{base_name}.in.settings"])
-            solute_data_file = tuple([structure])
-        else:
-            raise ValueError(f"Unknown ff_mode for solute, got {ff_mode}, "
-                             "expected ``moltemplate`` or ``radonpy``")
-
-        cross_ps = sim_params.get("cross_pairstyle",
-                                  solvent_styles["pair"]["styles"][-1])
-        override_cross = sim_params.get("override_cross_pairstyle")
-
-        return forcefield_merger(
-            style_files=[
-                solute_styles_file, f"{self.forcefield_path}/solvent.in.init"
-            ],
-            params_files=[
-                solute_params_file,
-                tuple([f"{self.forcefield_path}/solvent.in.settings"])
-            ],
-            data_files=[solute_data_file,
-                        tuple(solvent_reduced_names)],
-            atom_style=atom_style,
-            extra_pair_styles=extra_pair_styles,
-            extra_coeff_lines=extra_coeff_lines,
-            mixing_rule="arithmetic",
-            cross_pairstyle=cross_ps,
-            override_cross_ps=override_cross,
-            stack_ff=True,
-            outparams=f"{self.forcefield_path}/system_packed.in.settings",
-            outstyle=f"{self.forcefield_path}/system_packed.in.init")
+            outparams=f"{self.forcefield_path}/combined.in.settings",
+            outstyle=f"{self.forcefield_path}/combined.in.init")
 
     def _pack_solute_solvent_system(self, system_dir, molecule_list,
                                     reduced_names, system_params, atom_style,
@@ -1578,16 +1646,7 @@ class SolvationFreeEnergy(TargetProperty):
                     seed=random_seed,
                     lammps_file=True)
 
-        solvent_types, solute_types, all_types, all_charges = \
-            self._parse_types_and_charges_from_data(
-                f"{system_dir}/system_packed.data", 1, atom_style, self.logger)
-
-        return {
-            "solvent_types": solvent_types,
-            "solute_types": solute_types,
-            "all_types": all_types,
-            "all_charges": all_charges,
-        }
+        return None
 
     def _adjust_soft_pair_coeffs(self, styles, coeffs, solvent_types,
                                  solute_types, sim_params):
@@ -1671,140 +1730,9 @@ class SolvationFreeEnergy(TargetProperty):
                     styles["pair"]["hybrid"] = "hybrid/overlay"
                 base_names = [s.split()[0] for s in styles["pair"]["styles"]]
 
-    def _parse_types_and_charges_from_data(
-        self,
-        data_file_path,
-        solute_molecule_id=1,
-        atom_style="full",
-        logger=None,
-    ):
-        """
-        Parse atom types and charges from a LAMMPS data file's Atoms section.
+        return styles, coeffs
 
-        Supports 'full' (atom-ID mol-ID atom-type charge x y z) and 'molecular'
-        (atom-ID mol-ID atom-type x y z) atom styles; accelerator suffixes
-        (``/omp``, ``/kk``) on ``atom_style`` are stripped before checking.
-        Atom counts and atom-type counts are read from the data file's header
-        lines, and exactly that many non-blank atom lines are then read from
-        the Atoms section. Atoms belonging to ``solute_molecule_id`` are
-        classified as solute; all other atoms are classified as solvent.
-
-        :param data_file_path: Path to the LAMMPS data file to parse.
-        :type data_file_path: str
-        :param solute_molecule_id: Molecule ID in the data file's Atoms
-            section that identifies the solute; all other molecule IDs are
-            treated as solvent.
-        :type solute_molecule_id: int, optional
-        :param atom_style: LAMMPS atom style used in the data file. Supported
-            base styles are "full" and "molecular" (optionally suffixed with
-            ``/omp`` or ``/kk``).
-        :type atom_style: str, optional
-        :param logger: Logger whose ``.info`` method is used to report parsed
-            atom types. If None, results are printed instead.
-        :type logger: logging.Logger or None, optional
-
-        :returns:
-            A tuple ``(solvent_types, solute_types, all_types, all_charges)``:
-            sorted lists of solvent atom types, solute atom types, and all
-            atom types (1 through the declared number of atom types), and a
-            dict mapping atom type to charge (empty if ``atom_style`` has no
-            charge column).
-        :rtype: tuple
-        """
-
-        log = logger.info if logger is not None else print
-
-        atom_style = atom_style[:-len('/omp')] if atom_style.endswith(
-            '/omp') else atom_style
-        atom_style = atom_style[:-len('/kk')] if atom_style.endswith(
-            '/kk') else atom_style
-
-        if atom_style not in ("full", "molecular"):
-            raise ValueError("_parse_types_and_charges_from_data only supports"
-                             "'full' or 'molecular' atom_style, "
-                             f"got '{atom_style}'")
-        has_charge = atom_style == "full"
-
-        solute_types = set()
-        solvent_types = set()
-        all_charges = {}
-        num_atoms = None
-        num_atom_types = None
-
-        with open(data_file_path) as f:
-            lines = f.readlines()
-
-        # Find declared counts from the header
-        for line in lines:
-            parts = line.split("#")[0].split()
-            if len(parts) >= 2:
-                if parts[1] == "atoms":
-                    num_atoms = int(parts[0])
-                elif parts[1] == "atom" and len(
-                        parts) >= 3 and parts[2] == "types":
-                    num_atom_types = int(parts[0])
-
-            if num_atoms is not None and num_atom_types is not None:
-                break
-
-        if num_atoms is None:
-            raise ValueError(
-                f"Could not find 'N atoms' header line in {data_file_path}")
-        if num_atom_types is None:
-            raise ValueError(f"Could not find 'N atom types' header line "
-                             f"in {data_file_path}")
-        all_types = set(range(1, num_atom_types + 1))
-
-        # Find the Atoms section and read exactly num_atoms non-blank lines
-        atoms_start = None
-        for i, line in enumerate(lines):
-            if line.strip().startswith("Atoms"):
-                atoms_start = i + 1
-                break
-
-        if atoms_start is None:
-            raise ValueError(f"No 'Atoms' section found in {data_file_path}")
-
-        parsed = 0
-        i = atoms_start
-        while parsed < num_atoms and i < len(lines):
-            stripped = lines[i].split("#")[0].strip()
-            i += 1
-            if not stripped:
-                continue
-
-            parts = stripped.split()
-            mol_id = int(parts[1])
-            atom_type = int(parts[2])
-            if has_charge:
-                all_charges[atom_type] = float(parts[3])
-
-            if mol_id == solute_molecule_id:
-                solute_types.add(atom_type)
-            else:
-                solvent_types.add(atom_type)
-            parsed += 1
-
-        if parsed < num_atoms:
-            raise ValueError(
-                f"Expected {num_atoms} atoms but only parsed {parsed} in "
-                f"{data_file_path}")
-        if not solute_types:
-            raise ValueError(
-                f"No atoms found for solute molecule ID {solute_molecule_id}. "
-                f"Check solute_molecule_id in ti_settings.")
-        if not solvent_types:
-            raise ValueError("No solvent atoms found. Check your data file.")
-
-        log(f"Parsed atom types from {os.path.basename(data_file_path)}:")
-        log(f"  Solute  (molecule {solute_molecule_id}):"
-            f"{sorted(solute_types)}")
-        log(f"  Solvent (all others): {sorted(solvent_types)}")
-
-        return sorted(solvent_types), sorted(solute_types), sorted(
-            all_types), all_charges
-
-    def _build_charge_modify(self, solute_types, all_charges):
+    def _build_charge_modify(self, solute_charges):
         """
         Build LAMMPS input-script snippets for scaling solute atom charges
         during a free-energy perturbation run.
@@ -1831,35 +1759,29 @@ class SolvationFreeEnergy(TargetProperty):
         :rtype: dict
         """
 
-        charge_modification_block = ""
         delta_charge_block = ""
         compute_fep_forward = ""
         compute_fep_backward = ""
 
         prefix = "                "
-        for type in solute_types:
-            charge = all_charges[type]
-            suffix = '\n' if (type == max(solute_types)) else ' &\n'
-            if type in solute_types:
-                charge_modification_block += (
-                    f'set type {type} charge $( {charge} * v_lambda_c )\n')
-                delta_charge_block += (f'variable        dq{type} equal '
-                                       f'{charge}*(v_lambda_diff)\n')
-                delta_charge_block += (f'variable        ndq{type}      equal '
-                                       f'{charge}*(v_nlambda_diff)\n')
-                compute_fep_forward += (
-                    f'{prefix}atom charge {type} v_dq{type}{suffix}')
-                compute_fep_backward += (
-                    f'{prefix}atom charge {type} v_ndq{type}{suffix}')
+        for t in solute_charges:
+            charge = solute_charges.get(t)
+            suffix = '\n' if (t == max(solute_charges.keys())) else ' &\n'
+            delta_charge_block += (f'variable        dq{t} equal '
+                                   f'{charge}*(v_lambda_diff)\n')
+            delta_charge_block += (f'variable        ndq{t}      equal '
+                                   f'{charge}*(v_nlambda_diff)\n')
+            compute_fep_forward += (f'{prefix}atom charge {t} v_dq{t}{suffix}')
+            compute_fep_backward += (
+                f'{prefix}atom charge {t} v_ndq{t}{suffix}')
 
         return {
-            "charge_modification_block": charge_modification_block,
             "delta_charge_block": delta_charge_block,
             "fep_elec_forward": compute_fep_forward,
             "fep_elec_backward": compute_fep_backward
         }
 
-    def _write_charge_file(self, all_types, all_charges, output_file):
+    def _write_charge_file(self, all_charges, output_file):
         """
         Write a plain LAMMPS settings file of 'set type <type> charge <val>'
         lines for every atom type, based on parsed charges. This file can
@@ -1868,8 +1790,6 @@ class SolvationFreeEnergy(TargetProperty):
         regardless of whether those charges originally came from
         Data Atoms or a .in.charges override.
 
-        :param all_types: iterable of all atom types (solute + solvent)
-        :type all_types: iterable
         :param all_charges: dict {atom_type: charge}
         :type all_charges: dict
         :param output_file: path to write the charge-setting file to
@@ -1878,8 +1798,8 @@ class SolvationFreeEnergy(TargetProperty):
         :rtype: str
         """
         lines = []
-        for atom_type in sorted(all_types):
-            charge = all_charges[atom_type]
+        for atom_type in sorted(all_charges.keys()):
+            charge = all_charges.get(atom_type)
             lines.append(f"set type {atom_type} charge {charge}\n")
 
         with open(output_file, "w") as f:
@@ -2122,25 +2042,44 @@ class SolvationFreeEnergy(TargetProperty):
                 errors.append(
                     f"Simulation parameter {k} cannot be < 0, got {v}")
 
-        pack_tol = system_params.get('pack_tol')
-        pack_boxlen = system_params.get('pack_boxlen')
-        if not (pack_tol > 0 and pack_boxlen > 0):
-            errors.append("pack_tol and pack_boxlen must both be > 0")
+        # Check ints
+        for k in ('equil_steps', 'ti_steps'):
+            v = sim_params.get(k)
+            if not isinstance(v, int):
+                errors.append(f"Simulation parameter {k} should be int.")
 
+        # Check others for int or float type
+        for k in ('temp', 'press', 'temp_damp', 'press_damp', 'timestep'):
+            v = sim_params.get(k)
+            if not isinstance(v, (int, float)):
+                errors.append(f"Simulation parameter {k} should be "
+                              "type int or float.")
+
+        # Check packing stuff
+        for k in ('pack_tol', 'pack_boxlen'):
+            v = system_params.get(k)
+            if not isinstance(v, (int, float)):
+                errors.append(f"System parameter {k} should be "
+                              "type int or float.")
+            elif v <= 0:
+                errors.append(f"System parameter {k} should be > 0.")
+
+        # Check valid free energy type
         free_energy = ti_params.get('free_energy')
-        if free_energy in ('gibbs', 'helmholtz'):
-            sim_params['free_energy'] = free_energy
-        else:
+        if free_energy not in ('gibbs', 'helmholtz'):
             errors.append(f"free_energy must be ``helmholtz`` or "
                           f"``gibbs``, got {free_energy}")
 
+        # Check valid equil_frac
         equil_frac = ti_params.get('equil_frac')
-        if equil_frac < 0 or equil_frac >= 1:
-            errors.append("equil_frac must be between 0 and 1, "
-                          f"got {equil_frac}")
-        else:
-            sim_params['equil_frac'] = equil_frac
+        if not isinstance(equil_frac, (int, float)):
+            errors.append("TI parameter equil_frac should be "
+                          "type int or float.")
+        elif equil_frac <= 0 or equil_frac >= 1:
+            errors.append("TI parameeter equil_frac must be between "
+                          f"0 and 1, got {equil_frac}")
 
+        # Check if lambda_values is int or list of floats
         lambda_values = ti_params.get('lambda_values')
         if isinstance(lambda_values, int):
             if lambda_values <= 1:
@@ -2159,93 +2098,128 @@ class SolvationFreeEnergy(TargetProperty):
                 if not any(abs(x - 1.0) < 1e-9 for x in lambda_values):
                     errors.append("lambda_values list must include 1.0")
         else:
-            errors.append(
-                "lambda_values must be a list of floats or an int count")
+            errors.append("lambda_values must be a list of floats or "
+                          "an int for linearly spaced lambda values.")
 
-        if not errors:
-            ti_params['lambda_values'] = lambda_values
-            self.logger.info(
-                f"\tlambda windows: {[f'{lam:.5f}' for lam in lambda_values]}")
-
+        # Check if lambda_diff is between 0 and 0.5
         lambda_diff = ti_params.get('lambda_diff')
-        if lambda_diff is None or lambda_diff <= 0:
-            errors.append(f"lambda_diff must be > 0, got {lambda_diff!r}")
+        if not isinstance(lambda_diff, float):
+            errors.append('TI parameter lambda_diff should be type float.')
+        elif lambda_diff <= 0 or lambda_diff >= 0.5:
+            errors.append(
+                f"lambda_diff must be between 0 and 0.5, got {lambda_diff!r}")
 
+        # Check atom style is valid and includes molecule ID
         atom_style = sim_params.get('atom_style')
         if atom_style not in ("full", "molecular"):
             errors.append(
                 f"atom_style must be 'full' or 'molecular', got {atom_style!r}"
             )
 
+        # Check mode is a valid mode
         system_mode = system_params.get('system_mode')
-        if system_mode.lower() not in ("pack", "prepared"):
+        if not isinstance(system_mode, str):
+            errors.append("System parameter system_mode should be type str")
+        elif system_mode.lower() not in ("pack", "prepared"):
             errors.append(f"Unknown system_mode {system_mode},"
                           "expected ``pack`` or ``prepared``")
-        else:
-            self.system_mode = system_mode.lower()
 
-        if self.system_mode == "pack":
-            pack_exe = executables.get('packmol')
+        # Check executables based on the (valid) system_mode
+        if system_mode.lower() == "pack":
+
             use_moltemplate = False
+            pack_exe = executables.get('packmol')
             if pack_exe is None:
                 errors.append("Packmol executable missing from executables")
-            else:
-                if shutil.which(pack_exe) is None:
-                    errors.append(f"Packmol execuatable {pack_exe} "
-                                  "is not in path")
+            elif shutil.which(pack_exe) is None:
+                errors.append(f"Packmol execuatable {pack_exe} is not in path")
 
-            required_fields = {
+            solvent_required = {
                 "class", "ff_mode", "forcefield", "structure", "number"
             }
+            solute_required = {"class", "forcefield", "structure", "number"}
             solute = system_params.get('solute')
             if not isinstance(solute, dict):
                 errors.append("Expect solute with fields ``class``, "
-                              "``ff_mode``, ``forcefield``, ``structure``")
+                              "``ff_mode``, ``forcefield``, ``structure``,"
+                              " and optionally ``number``")
             else:
-                system_params['solute']['number'] = 1
-                missing = required_fields - solute.keys()
+                solute.setdefault("number", 1)
+                missing = solute_required - solute.keys()
                 if missing:
                     errors.append("Expect solute with fields ``class``, "
                                   "``ff_mode``, ``forcefield``, ``structure``"
                                   f", solute missing fields: {missing}")
+                sol_num = solute.get("number")
+                if not isinstance(sol_num, int) or sol_num < 1:
+                    errors.append(
+                        f"Solute number must be positive int, got {sol_num}")
                 else:
                     ff_mode = solute.get('ff_mode')
-                    if ff_mode.lower() not in ('radonpy', 'moltemplate'):
+                    if not isinstance(ff_mode, str):
+                        errors.append("ff_mode should be type string.")
+                    elif ff_mode.lower() not in ('radonpy', 'moltemplate'):
                         errors.append("Unknown ff_mode for solute, "
                                       "expected ``radonpy`` or ``moltemplate``"
                                       f", got {ff_mode}")
-                    elif ff_mode.lower() == "moltemplate":
+                    if ff_mode.lower() == "moltemplate":
                         use_moltemplate = True
 
+            # Check solvent list
             solvent = system_params.get('solvent')
             if isinstance(solvent, dict):
                 solvent = [solvent]
             if isinstance(solvent, list):
                 for i, s in enumerate(solvent):
-                    missing = required_fields - s.keys()
+                    missing = solvent_required - s.keys()
                     if missing:
                         errors.append(
                             "Expect solvent with fields ``class``, "
                             "``ff_mode``, ``forcefield``, ``structure``"
                             f", and ``number``, solvent {i} missing"
                             f" fields: {missing}")
-                    else:
+                    else:  # Check each required field is correct type
                         ff_mode = s.get('ff_mode')
-                        if ff_mode.lower() not in ('radonpy', 'moltemplate'):
+                        if not isinstance(ff_mode, str):
                             errors.append(
-                                f"Unknown ff_mode for solvent {i},"
+                                "Solvent ff_mode should be type string")
+                        elif ff_mode.lower() not in ('radonpy', 'moltemplate'):
+                            errors.append(
+                                f"Unknown ``ff_mode`` for solvent {i},"
                                 "expected ``radonpy`` or ``moltemplate``"
                                 f", got {ff_mode}")
                         elif ff_mode.lower() == "moltemplate":
                             use_moltemplate = True
-                        number = s.get('number')
-                        if not isinstance(number, int):
+                        mol_class = s.get('class')
+                        if not isinstance(mol_class, str):
+                            errors.append(
+                                f"Non-string ``class`` for solute {i},"
+                                f" got {mol_class}")
+                        mol_ff = s.get('forcefield')
+                        if not isinstance(mol_ff, str):
+                            errors.append(
+                                f"Non-string ``forcefield`` for solute {i},"
+                                f"got {ff_mode}")
+                        elif not os.path.exists(mol_ff):
+                            errors.append(f"``forcefield`` for solvent {i} "
+                                          f"does not exist, got {mol_ff}")
+                        mol_structure = s.get('structure')
+                        if not isinstance(mol_structure, str):
+                            errors.append(
+                                "Solvent ff_mode should be type string")
+                        elif not isfile(mol_structure):
+                            errors.append(
+                                f"``structure`` for solvent {i} "
+                                f"does not exist, got {mol_structure}")
+                        mol_num = s.get('number')
+                        if not isinstance(mol_num, int):
                             errors.append(
                                 f"Non-integer ``number`` for solute {i},"
-                                f" got {number}")
+                                f" got {mol_num}")
             else:
                 errors.append(f"Solvent should be a list, got {type(solvent)}")
 
+            # If moltemplate is required, check that executable exists
             if use_moltemplate is True:
                 moltemp_exe = executables.get('moltemp')
                 if moltemp_exe is None:
@@ -2262,7 +2236,7 @@ class SolvationFreeEnergy(TargetProperty):
                         errors.append("Moltemplate cleanup executable "
                                       f"{moltemp_cleanup_exe}, not in path.")
 
-        elif self.system_mode == "prepared":
+        elif system_mode.lower() == "prepared":
             required_fields = {
                 "data_file", "style_file", "param_file", "solute_molecule_id"
             }
@@ -2272,6 +2246,7 @@ class SolvationFreeEnergy(TargetProperty):
                     "System_params requires ``data_file``, ``style_file``, "
                     "``param_file``, ``solute_molecule_id`` in "
                     "'prepared' system_mode.")
+
             data_file = system_params.get('data_file')
             style_file = system_params.get('style_file')
             param_file = system_params.get('param_file')
@@ -2286,12 +2261,74 @@ class SolvationFreeEnergy(TargetProperty):
                 errors.append(
                     f"Solute_molecule_id is not an int, got {sol_id}")
 
+        mixing_rule = sim_params.get('mixing_rule')
+        if not isinstance(mixing_rule, str):
+            errors.append("Mixing rule not string.")
+        elif mixing_rule.lower() not in ('arithmetic', 'geometric'):
+            errors.append(f"Unknwon mixing rule {mixing_rule}, "
+                          "expected ``arithmetic`` or ``geometric``")
+        override_cross = sim_params.get("override_cross_pairstyle")
+        if not isinstance(override_cross, bool):
+            errors.append("Got non-boolean for 'override_cross_pairstyle'"
+                          " in sim_params.")
+        cross_ps = sim_params.get("cross_pairstyle")
+        if cross_ps is not None and not isinstance(cross_ps, str):
+            errors.append("Got non-string for 'cross_pairstyle'"
+                          " in sim_params.")
+
+        # Check that no extra keys exist anywhere
+        allowed_keys = {
+            "sim_params": {
+                "units", "atom_style", "soft_args", "pair_modify",
+                "kspace_style", "bond_style", "angle_style", "dihedral_style",
+                "improper_style", "kspace_modify", "special_bonds",
+                "extra_pair_styles", "extra_coeff_lines",
+                "override_cross_pairstyle", "cross_pairstyle", "mixing_rule",
+                "temp", "press", "temp_damp", "press_damp", "timestep",
+                "equil_steps", "ti_steps", "free_energy"
+            },
+            "executables": {"packmol", "moltemp", "moltemp_cleanup"},
+            "system_params": {
+                "system_mode",
+                "pack_tol",
+                "pack_boxlen",
+                "solute",
+                "solvent",
+                "data_file",
+                "style_file",
+                "param_file",
+                "solute_molecule_id",
+            },
+            "ti_params":
+            {"free_energy", "lambda_values", "lambda_diff", "equil_frac"},
+        }
+
+        sections = {
+            "sim_params": sim_params,
+            "executables": executables,
+            "system_params": system_params,
+            "ti_params": ti_params
+        }
+
+        for name, params in sections.items():
+            extra = params.keys() - allowed_keys[name]
+            if extra:
+                errors.append(
+                    f"Unknown keys in '{name}': {sorted(extra)}"
+                    f". Check that keys are in the correct sections.")
+
         if errors:
             raise ValueError("Invalid solvation free energy inputs:\n  - "
                              + "\n  - ".join(errors))
         else:
+            ti_params['lambda_values'] = lambda_values
+            sim_params['mixing_rule'] = mixing_rule.lower()
+            sim_params['free_energy'] = free_energy.lower()
+            self.logger.info(
+                f"lambda values: {[f'{lam:.5f}' for lam in lambda_values]}")
             self.system_mode = system_mode.lower()
-            return sim_params, system_params, ti_params
+
+        return sim_params, system_params, ti_params
 
     def _write_results_file(self, lambda_values, lens, dudl, dudl_std,
                             dudl_err, filepath):
@@ -2448,7 +2485,8 @@ class SolvationFreeEnergy(TargetProperty):
             equil_data = timeseries[-prod_len:]
             return (equil_data, prod_len, np.mean(equil_data),
                     np.std(equil_data), np.std(equil_data) / np.sqrt(prod_len))
-        except (FileNotFoundError, KeyError, ValueError, IndexError) as e:
+        except (FileNotFoundError, KeyError, ValueError, IndexError,
+                TypeError) as e:
             self.logger.warning(
                 f'Could not extract "{quantity}" from {logpath}: {e}')
             return (0.0, 0, 0.0, 0.0, 0.0)
@@ -2474,7 +2512,7 @@ class SolvationFreeEnergy(TargetProperty):
         :returns: Path to the written combined .lt file.
         :rtype: str
         """
-        if lt_file is None or not os.path.isfile(lt_file):
+        if lt_file is None or not isfile(lt_file):
             raise ValueError(
                 f".lt file {lt_file} does not exist or was not provided.")
         if not class_name or class_name == "unknown":
@@ -2571,10 +2609,10 @@ class SolvationFreeEnergy(TargetProperty):
 
     def apply_charges_file(self, mt_dir, base_name, atom_style="full"):
         """
-        If moltemplate wrote a system_{name}.in.charges file (containing lines
+        If moltemplate wrote a {base_name}.in.charges file (containing lines
         like 'set type 1 charge -0.834'), parse the atom-type -> charge
         mapping and apply it to every atom of that type in the charge column
-        of system_{name}.data's Atoms section.
+        of {base_name}.data's Atoms section.
 
         :param mt_dir: Directory containing the charges file and data file.
         :type mt_dir: str
@@ -2596,9 +2634,9 @@ class SolvationFreeEnergy(TargetProperty):
         charges_file = os.path.join(mt_dir, f'{base_name}.in.charges')
         data_file = os.path.join(mt_dir, f'{base_name}.data')
 
-        if not os.path.isfile(charges_file):
+        if not isfile(charges_file):
             return False
-        if not os.path.isfile(data_file):
+        if not isfile(data_file):
             raise ValueError(
                 f"Found {charges_file} but matching data file {data_file} "
                 "does not exist.")
@@ -2852,9 +2890,52 @@ class SolvationFreeEnergy(TargetProperty):
         """
         Write self.finished_jobs to a JSON manifest in the analysis directory,
         so job paths survive even if the checkpoint gets corrupted.
+        No inputs required.
         """
-        manifest_path = os.path.join(self.analysis_dir, "finished_jobs.json")
+        manifest_path = os.path.join(self.analysis_dirs[-1],
+                                     "finished_jobs.json")
         tmp_path = manifest_path + ".tmp"
         with open(tmp_path, "w") as f:
             json.dump(self.finished_jobs, f, indent=2)
         os.replace(tmp_path, manifest_path)
+
+    def _merge_finished_jobs(self, analysis_dirs, master_analysis_dir):
+        """
+        Merge the finished-job manifests from several analysis directories
+        into one manifest in ``master_analysis_dir``.
+
+        :param analysis_dirs: directories containing a finished-jobs manifest
+        :type analysis_dirs: list of str
+        :param master_analysis_dir: directory where merged manifest is written
+        :type master_analysis_dir: str
+        :param filename: manifest filename, same in every directory
+        :type filename: str
+
+        :returns: merged manifest, keyed by 'ti_elec', 'ti_vdw', 'ti_vacuum'
+        :rtype: dict
+        """
+        all_jobs = {'ti_elec': [], 'ti_vdw': [], 'ti_vacuum': []}
+
+        for d in analysis_dirs:
+            manifest_path = os.path.join(d, "finished_jobs.json")
+            if not os.path.isfile(manifest_path):
+                self.logger.warning(
+                    f"No manifest found at {manifest_path}, skipping")
+                continue
+
+            with open(manifest_path, "r") as f:
+                dir_jobs = json.load(f)
+
+            for key, jobs in dir_jobs.items():
+                if key not in all_jobs:
+                    self.logger.warning(
+                        f"Unexpected key '{key}' in {manifest_path}, skipping")
+                    continue
+                all_jobs[key].extend(jobs)
+
+        out_path = os.path.join(master_analysis_dir, 'finished_jobs.json')
+        with open(out_path, "w") as f:
+            json.dump(all_jobs, f, indent=2)
+
+        self.logger.info(f"Wrote merged finished-jobs manifest to {out_path}")
+        return all_jobs
