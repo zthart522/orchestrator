@@ -813,22 +813,19 @@ class SolvationFreeEnergy(TargetProperty):
             accelerator: Optional[str] = None,
             scheduler: Optional[Scheduler] = None,
             storage: Optional[Storage] = None,  # CURRENTLY NOT IMPLEMENTED
-            modified_params: Optional[Dict[
-                str, Any]] = None,  # CURRENTLY NOT IMPLEMENTED
             **kwargs):
         """
-        Calculate a target property with mean and standard deviation
-        Derived classes should list explicit arguments required
-        to calculate their properties.
+        Calculate the solvation free energy with mean and standard error of the
+        mean, sampled from multiple independent runs.
 
-        Mean and standard deviation will be obtained from multiple
-        number of calculations (n_calc)
+        Mean and standard deviation are obtained by averaging dU/dλ estimates
+        and propogating the standard deviation estimates from multiple
+        independent TI runs (n_calc) using the calculate_property() function.
 
         :param n_calc: total number of calculations to perform
         :type n_calc: int
-        :param scheduler: the scheduler for managing job submission
-        :type scheduler: Scheduler
-        :returns: mean and standard deviation of the calculated property
+
+        :returns: mean and standard error of calculated solvation free energy
         """
 
         sim_params, system_params, ti_params = self._validate_inputs(
@@ -1209,7 +1206,6 @@ class SolvationFreeEnergy(TargetProperty):
             self.logger.info('SYSTEM MODE = Prepared')
 
             solute_id = system_params.get('solute_molecule_id')
-
             style_file = system_params.get('style_file')
             param_file = system_params.get('param_file')
             data_file = system_params.get('data_file')
