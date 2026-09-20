@@ -6,11 +6,12 @@ from random import randint
 
 def _try_int(tok):
     """
-    Try taking int() of input string without
-    erroring out
+    Try taking int() of input string without erroring out.
 
     :param tok: An input to attempt int()
     :type tok: str
+    :returns: The integer value, or None if conversion fails.
+    :rtype: int or None
     """
     try:
         return int(tok)
@@ -20,11 +21,12 @@ def _try_int(tok):
 
 def _try_float(tok):
     """
-    Try taking float() of input string without
-    erroring out
+    Try taking float() of input string without erroring out.
 
     :param tok: An input to attempt float()
     :type tok: str
+    :returns: The float value, or None if conversion fails.
+    :rtype: float or None
     """
     try:
         return float(tok)
@@ -38,6 +40,10 @@ def _detect_filetype(filepath: str) -> str:
 
     :param filepath: Path of file to extract extension from.
     :type filepath: str
+    :returns: The lowercase extension without the leading period
+        (e.g. "xyz", "data"). No validation against supported
+        formats is performed.
+    :rtype: str
     """
     ext = os.path.splitext(filepath)[1].lstrip(".").lower()
     return ext
@@ -45,29 +51,30 @@ def _detect_filetype(filepath: str) -> str:
 
 def read_lammps_data(filepath: str, atom_style: str) -> (dict, dict, tuple):
     """
-    Parse a LAMMPS data file and return (construction, topology).
+    Parse a LAMMPS data file and return (construction, topology, box).
 
-    :param datafile: Path to a lammps .data file
-    :type datafile: str
-    :param atom_style: Atom style of corresponding .data file
-    :type atom_style: str (supports ``atomic``, ``charge``,
-    ``molecular``, or ``full``)
+    :param filepath: Path to a LAMMPS .data file
+    :type filepath: str
+    :param atom_style: Atom style of the corresponding .data file. Supports
+        ``atomic``, ``charge``, ``molecular``, or ``full``.
+    :type atom_style: str
 
-    Returns construction and topology.
-    :param construction: Contains the number of atom types, bond types,
-    angle types, dihedral types, improper types, atomic masses, and any
-    coeffs in the lammps .data file. The primary role of constructor is
-    to define how the lammps .data file was created.
-    :type construction: dict
-    :param topology: Contains all the topology information contained in
-    the passed lammps .data file. This includes the atom, bond, angle,
-    dihedral, and improper coeffs. The primary role of topology is to
-    preserve the location and connectivity of the passed lammps .data
-    file.
-    :type topology: dict
+    Comments (everything after ``#``) are stripped. The Velocities,
+    Ellipsoids, Lines, Triangles, and Bodies sections are ignored.
 
-    Examples of the resulting construction and topology are shown
-    below:
+    :returns:
+        A tuple ``(construction, topology, box)``.
+    :rtype: tuple
+
+    :raises ValueError: If a data file containing an Atoms section is read
+        with an unsupported ``atom_style``, or if a line in the Atoms
+        section has fewer columns than ``atom_style`` requires.
+
+    ``construction`` (dict) defines how the data file was built: the number
+    of each type, the masses, and the force-field coefficients. Coefficient
+    values are stored as lists of strings, keyed by type ID. Both
+    "Pair Coeffs" and "PairIJ Coeffs" sections are stored under
+    ``pair_coeffs``, keyed by the first integer on each line.
 
     construction = {
       "atom types": int, "bond types": int, "angle types": int,
@@ -77,13 +84,29 @@ def read_lammps_data(filepath: str, atom_style: str) -> (dict, dict, tuple):
       "bond_coeffs": {...}, "angle_coeffs": {...},
       "dihedral_coeffs": {...}, "improper_coeffs": {...},
     }
+
+    ``topology`` (dict) preserves the location and connectivity of the
+    atoms. Bonded entries do NOT include their own ID (IDs are regenerated
+    on write), but the atom IDs they reference are the ones from the file.
+
     topology = {
-      "atoms": [(atom_id, mol_id, type, x, y, z, q), ...],
-      "bonds": [(bond_id, type, atom1, atom2), ...],
-      "angles": [(angle_id, type, atom1, atom2, atom3), ...],
-      "dihedrals": [(dihedral_id, type, a1, a2, a3, a4), ...],
-      "impropers": [(improper_id, type, a1, a2, a3, a4), ...],
+      "atoms": [(atom_id, mol_id, type, x, y, z, q, extra), ...],
+      "bonds": [(type, atom1, atom2), ...],
+      "angles": [(type, atom1, atom2, atom3), ...],
+      "dihedrals": [(type, a1, a2, a3, a4), ...],
+      "impropers": [(type, a1, a2, a3, a4), ...],
+      "atom_id_to_index": {atom_id: index into "atoms", ...},
     }
+
+    Notes on the atom entries:
+      - ``mol_id`` is 1 for atom styles without a molecule column.
+      - ``q`` is only read for ``full``; it is 0.0 for other styles.
+      - ``extra`` is a string of any trailing columns (e.g. image flags).
+      - ``atom_id_to_index`` is only present if an Atoms section was found.
+
+    ``box`` is a tuple ``(xlo, xhi, ylo, yhi, zlo, zhi)``. Any axis missing
+    from the file defaults to (-0.5, 0.5), the LAMMPS default. Tilt factors
+    are not parsed.
     """
     type_count_keys = [
         "atom types", "bond types", "angle types", "dihedral types",
@@ -268,10 +291,14 @@ def read_lammps_data(filepath: str, atom_style: str) -> (dict, dict, tuple):
 
 def read_xyz(filepath):
     """
-    Read a .xyz file, return list of (label, x, y, z) in file order.
+    Read a .xyz file.
 
     :param filepath: A path to a .xyz file
-    :filepath type: str
+    :type filepath: str
+    :returns: One ``(label, x, y, z)`` tuple per atom, in file order. The
+        atom count is taken from the first line and the comment line is
+        skipped.
+    :rtype: list of tuple
     """
     with open(filepath, "r") as f:
         lines = f.readlines()
@@ -287,8 +314,9 @@ def write_xyz(atoms, filepath, comment="", element_map=None):
     """
     Write atoms out to a .xyz file.
 
-    :param atoms: Atom data as a list of (mol_id, type, x, y, z, q, extra)
-        tuples.
+    :param atoms: Atom data as a list of
+        ``(atom_id, mol_id, type, x, y, z, q, extra)`` tuples (i.e.
+        ``topology["atoms"]``).
     :type atoms: list of tuple
     :param filepath: Path where the .xyz file will be written.
     :type filepath: str
@@ -301,7 +329,7 @@ def write_xyz(atoms, filepath, comment="", element_map=None):
     :type element_map: dict, optional
 
     The resulting .xyz file contains one atom per line in the format
-    ``label x y z``.
+    ``label x y z``, with coordinates to six decimal places.
     """
 
     with open(filepath, "w") as f:
@@ -326,7 +354,9 @@ def write_packmol_script(mol_specs,
     :param mol_specs: Molecule specifications containing the structure
         filepath and number of copies to pack. The order must match the
         corresponding molecule definitions used later when reconstructing
-        the combined system.
+        the combined system. The ``structure`` paths are written to the
+        script exactly as given, so they must be valid relative to the
+        directory Packmol runs in (see ``run_packmol``).
     :type mol_specs: list of dict
     :param box: Simulation box bounds in the order
         ``(xlo, xhi, ylo, yhi, zlo, zhi)``.
@@ -373,12 +403,16 @@ def run_packmol(exe, script_path):
 
     :param exe: Packmol executable or command used to launch Packmol.
     :type exe: str
-    :param script_path: Path to the Packmol input script.
+    :param script_path: Path to the Packmol input script. The script is
+        passed to Packmol on stdin, and Packmol is run with the script's
+        directory as its working directory, so relative paths in the
+        script (including the output file) resolve there.
     :type script_path: str
 
-    Returns the completed subprocess result if Packmol succeeds.
-    Raises a RuntimeError containing Packmol's stdout and stderr if
-    the process exits with a non-zero return code.
+    :returns: The completed subprocess result if Packmol succeeds.
+    :rtype: subprocess.CompletedProcess
+    :raises RuntimeError: If Packmol exits with a non-zero return code.
+        The message contains Packmol's stdout and stderr.
     """
     with open(script_path) as stdin_file:
         result = subprocess.run(
@@ -407,21 +441,27 @@ def pack_system(molecules,
                 lammps_file=True):
     """
     Pack one or more molecule structures into a simulation box using
-    Packmol and optionally reconstruct the result as a LAMMPS data file.
+    Packmol and, for LAMMPS inputs, reconstruct the result as a LAMMPS
+    data file.
 
     :param molecules: Molecule specifications. Each dictionary must contain
-        ``"structure"`` and ``"number"``. LAMMPS data files are converted
-        to temporary .xyz structures before packing. For LAMMPS inputs,
-        each molecule dictionary is also populated with its parsed
-        ``"topology"``.
+        ``"structure"`` and ``"number"``. All structures must share one file
+        extension. For LAMMPS inputs, each structure is parsed with
+        ``read_lammps_data`` and written to an .xyz file next to the
+        original. Each dictionary is then modified IN PLACE:
+        ``"structure"`` is replaced with the path of that .xyz file, and
+        ``"topology"`` is set to the parsed ``(construction, topology)``
+        tuple.
     :type molecules: list of dict
     :param box: Simulation box bounds in the order
-        ``(xlo, xhi, ylo, yhi, zlo, zhi)``.
+        ``(xlo, xhi, ylo, yhi, zlo, zhi)``. Used both for packing and for
+        the reconstructed LAMMPS data file.
     :type box: tuple
     :param tolerance: Minimum distance between atoms enforced by Packmol.
     :type tolerance: float
-    :param pack_dir: Directory in which Packmol input, copied structures,
-        and output files will be stored.
+    :param pack_dir: Directory in which the Packmol input, copies of the
+        structure files, and the output files are stored. Created if it
+        does not exist.
     :type pack_dir: str
     :param packmol_exe: Packmol executable or command used to run Packmol.
     :type packmol_exe: str
@@ -431,17 +471,29 @@ def pack_system(molecules,
     :type atom_style: str
     :param seed: Optional random seed passed to Packmol.
     :type seed: int, optional
+    :param lammps_file: If True, the structures are treated as LAMMPS data
+        files regardless of their extension. Structures with a ``.data`` or
+        ``.lmp`` extension are always treated as LAMMPS files.
+    :type lammps_file: bool
 
-    Returns a dictionary containing the packed output path, filetype,
-    and packed atom coordinates. When the input structures are LAMMPS
-    data files, the dictionary also contains the reconstructed LAMMPS
-    data path, construction, and topology.
+    Packmol writes ``system_packed.xyz`` in ``pack_dir``. For LAMMPS inputs,
+    the combined system is written to ``system_packed.data`` in
+    ``pack_dir``. Packed atoms are labeled by atom type number, and
+    Packmol's output order (molecule by molecule, copy by copy) is assumed
+    to match the order used to rebuild the topology.
 
     :returns:
-        A dictionary with keys ``output_path``, ``filetype``,
-        ``packed_atoms``, and, for LAMMPS inputs, ``lammps_data_path``,
-        ``construction``, and ``topology``.
+        A dictionary with keys ``output_path`` (absolute path to the packed
+        structure), ``filetype``, ``packed_atoms`` (list of
+        ``(label, x, y, z)``; None if the filetype is not xyz), and, for
+        LAMMPS inputs, ``lammps_data_path`` (joined onto ``pack_dir`` as
+        given, not made absolute), ``construction``, and ``topology``.
     :rtype: dict
+
+    :raises ValueError: If ``molecules`` is empty or the structures have
+        different file extensions.
+    :raises AssertionError: If the number of packed atoms does not match
+        the number expected from the molecule specifications.
     """
 
     if not molecules:
@@ -579,7 +631,9 @@ def write_lammps_data(construction,
         and force-field coefficients.
     :type construction: dict
     :param topology: Dictionary containing atom, bond, angle, dihedral,
-        and improper topology information.
+        and improper topology information. Atoms are
+        ``(atom_id, mol_id, type, x, y, z, q, extra)`` tuples. Bonded
+        entries are ``(type, atom_id, ...)`` tuples without their own ID.
     :type topology: dict
     :param filepath: Path where the LAMMPS data file will be written.
     :type filepath: str
@@ -593,9 +647,17 @@ def write_lammps_data(construction,
     :param comment: Comment written as the first line of the data file.
     :type comment: str
 
-    The atom, bond, angle, dihedral, and improper IDs are generated
-    sequentially when the file is written.
+    :raises ValueError: If ``atom_style`` is unsupported.
+
+    Atom IDs are written as stored in ``topology["atoms"]``. Only the bond,
+    angle, dihedral, and improper IDs are generated sequentially on write,
+    so the atom IDs referenced by bonded entries must match the atom IDs
+    in the atoms list. Any ``extra`` string is appended to the end of each
+    atom line. Pair, bond, angle, dihedral, and improper coefficient
+    sections are written only if present in ``construction``, always under
+    the "Pair Coeffs"-style headers (never "PairIJ Coeffs").
     """
+
     atom_style_columns = {
         "atomic": ["type", "x", "y", "z"],
         "charge": ["type", "q", "x", "y", "z"],
@@ -696,19 +758,23 @@ def build_combined_system(molecules, atom_style="full"):
     LAMMPS system.
 
     :param molecules: Molecule specifications containing ``"number"`` and
-        ``"topology"`` entries. Each topology contains a construction and
-        topology dictionary for a single molecule.
+        ``"topology"`` entries. Each ``"topology"`` is a
+        ``(construction, topology)`` tuple for a single molecule, and its
+        topology must contain ``atom_id_to_index`` (as produced by
+        ``read_lammps_data``).
     :type molecules: list of dict
     :param atom_style: LAMMPS atom style associated with the molecule data.
-        This parameter is currently retained for interface consistency.
+        Currently unused; retained for interface consistency.
     :type atom_style: str
 
     Returns the combined construction and topology. Molecules with
     identical construction dictionaries share their type IDs; molecules
     with different constructions are assigned non-overlapping type ID
-    ranges. Each copy of a molecule receives a unique molecule ID, and
-    atom IDs in bonds, angles, dihedrals, and impropers are offset to
-    reference the correct copy.
+    ranges. Each copy of a molecule receives a unique molecule ID. Atom IDs
+    are renumbered sequentially from 1 across the whole system, and the
+    atom IDs in bonds, angles, dihedrals, and impropers are remapped
+    (through ``atom_id_to_index``) to the new IDs of the correct copy.
+    Bonded entries keep the ``(type, atom_id, ...)`` format with no ID.
 
     :returns:
         A tuple ``(combined_construction, combined_topology)``.
@@ -992,18 +1058,55 @@ def make_charge_exclusive_atom_types(construction,
                                      box,
                                      atom_style="full",
                                      target_mol_id=None,
+                                     logger=None,
                                      ndigits=8):
     """
     Split atom types so that every type carries exactly one charge
-    (and, if target_mol_id is given, so that the target molecule's types
-    are not shared with any other molecule).
+    (and, if ``target_mol_id`` is given, so that the target molecule's
+    types are not shared with any other molecule).
 
-    Masses and pair coefficients are copied from the parent type.
+    Masses and pair coefficients are copied from the parent type. The
+    modified system is written to ``filepath``. ``construction`` and
+    ``topology`` are modified in place.
 
-    Returns (construction, topology, new_to_old, type_charges) where
-    new_to_old maps each newly created type to its parent type and
-    type_charges maps every type used by the target atoms to its charge.
+    :param construction: Construction dictionary of the system.
+    :type construction: dict
+    :param topology: Topology dictionary of the system.
+    :type topology: dict
+    :param filepath: Path where the modified LAMMPS data file will be
+        written.
+    :type filepath: str
+    :param box: Simulation box bounds in the order
+        ``(xlo, xhi, ylo, yhi, zlo, zhi)``.
+    :type box: tuple
+    :param atom_style: LAMMPS atom style. If not ``charge`` or ``full``,
+        no types are changed; the data file is written as-is and empty
+        dictionaries are returned for the last three return values.
+    :type atom_style: str
+    :param target_mol_id: If given, only atoms in this molecule are
+        modified. If None, all atoms are considered.
+    :type target_mol_id: int, optional
+    :param logger: Optional logger. Warnings are sent to ``logger.info``
+        if provided, otherwise printed.
+    :type logger: logging.Logger, optional
+    :param ndigits: Number of decimal places to which charges are rounded
+        when deciding whether two charges are the same.
+    :type ndigits: int
+
+    Warnings are emitted if any type still carries multiple charges (this
+    can happen for atoms outside the target molecule), or if the target
+    molecule's net charge is not ~0.
+
+    :returns:
+        A tuple ``(construction, topology, new_to_old,
+        target_type_charges, all_type_charges)``, where ``new_to_old`` maps
+        each newly created type to its parent type,
+        ``target_type_charges`` maps each type used by the target atoms to
+        its charge, and ``all_type_charges`` maps every type in the system
+        to its charge (the lowest charge if a type carries several).
+    :rtype: tuple
     """
+
     if atom_style not in ("charge", "full"):
         write_lammps_data(construction,
                           topology,
@@ -1069,12 +1172,20 @@ def make_charge_exclusive_atom_types(construction,
         qs = sorted(charges_by_type[t])
         all_type_charges[t] = qs[0]
         if len(qs) > 1:
-            print(f"Warning: type {t} carries multiple charges: {qs}")
+            msg = f"Warning: type {t} carries multiple charges: {qs}"
+            if logger is None:
+                print(msg)
+            else:
+                logger.info(msg)
 
     # sanity check: net charge of the target should still be ~0
     qtot = sum(a[6] for a in new_atoms if in_target(a[1]))
     if target_mol_id is not None and abs(qtot) > 1e-4:
-        print(f"Warning: target molecule net charge is {qtot:.6f}")
+        msg = f"Warning: target molecule net charge is {qtot:.6f}"
+        if logger is None:
+            print(msg)
+        else:
+            logger.info(msg)
 
     write_lammps_data(construction,
                       topology,
@@ -1088,7 +1199,18 @@ def make_charge_exclusive_atom_types(construction,
 
 def compute_total_mass(construction, topology):
     """
-    Simple function for computing total mass of a system.
+    Compute the total mass of a system.
+
+    :param construction: Construction dictionary containing ``masses``,
+        keyed by atom type.
+    :type construction: dict
+    :param topology: Topology dictionary containing ``atoms``.
+    :type topology: dict
+    :returns: Sum of the masses of all atoms, in the units of the
+        masses in ``construction``.
+    :rtype: float
+    :raises KeyError: If an atom's type is missing from
+        ``construction["masses"]``.
     """
     masses = construction["masses"]
     atoms = topology["atoms"]

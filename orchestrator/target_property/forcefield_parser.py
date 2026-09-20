@@ -20,13 +20,13 @@ def _try_int(val):
     """
     Try taking ``int()`` of an input value without raising an error.
 
-    :param val: Value to attempt conversion to a int.
+    :param val: Value to attempt conversion to an int.
     :type val: str
 
-    Returns the converted float when conversion succeeds, or ``None``
-    when the value cannot be interpreted as a int.
+    Returns the converted int when conversion succeeds, or ``None``
+    when the value cannot be interpreted as an int.
 
-    :rtype: float or None
+    :rtype: int or None
     """
     try:
         return int(val)
@@ -210,7 +210,7 @@ def parse_styles(init_path):
     return styles
 
 
-def parse_coeffs(parameter_path, styles):
+def parse_coeffs(parameter_path, styles, logger=None):
     """
     Parse pair/bond/angle/dihedral/improper coefficient lines from a LAMMPS
     parameter file.
@@ -219,36 +219,41 @@ def parse_coeffs(parameter_path, styles):
     skipped. Each remaining line's keyword (e.g. ``pair_coeff``) is
     matched against the corresponding entry of ``styles`` to identify
     which declared sub-style the coefficients belong to, using the first
-    token after the type index/indices that matches a known (optionally
+    token after the keyword that matches a known (optionally
     accelerator-suffixed) sub-style name; if no such token is found, the
     first style declared for that category is assumed. Wildcard
     (``*``-containing) pair coefficient lines are skipped with a warning,
     since they must be added manually. For ``lj/*`` pair coefficients,
     epsilon and sigma are validated as numeric, and sigma is corrected to
-    a minimum of 1.0 if both epsilon and sigma are zero, to avoid LAMMPS
-    errors.
+    1.0 if both epsilon and sigma are zero, to avoid LAMMPS errors. Pair
+    type indices are reordered so that ``i <= j``.
 
     :param parameter_path: Path to the LAMMPS parameter file to parse
         (e.g. a ``*.in.settings`` file).
     :type parameter_path: str
     :param styles: Parsed style dictionary, as returned by
         :func:`parse_styles`, used to identify valid sub-style names for
-        each coefficient category.
+        each coefficient category. Every coefficient keyword found in the
+        file must have a corresponding category in ``styles``.
     :type styles: dict
+    :param logger: Optional logger. The wildcard warning is sent to
+        ``logger.info`` if provided, otherwise it is printed.
+    :type logger: logging.Logger, optional
 
     :returns: A dictionary keyed by coefficient category (``"pair"``,
         ``"bond"``, ``"angle"``, ``"dihedral"``, ``"improper"``). Pair
         coefficients are stored as ``coeffs["pair"][i][j] = (substyle,
         parts)`` for each type pair ``(i, j)`` with ``i <= j``; all other
         categories are stored as ``coeffs[category][type_index] =
-        (substyle, parts)``, where ``parts`` is the coefficient line's
-        tokens with the identified sub-style token removed.
+        (substyle, parts)``. ``parts`` is the list of the line's tokens
+        with the sub-style token removed. It still begins with the command
+        keyword (e.g. ``"pair_coeff"``), so the type indices are at
+        ``parts[1]`` (and ``parts[2]`` for pair coefficients).
     :rtype: dict
 
-    :raises ValueError: If a coefficient line requires a recognized
-        sub-style token (because the corresponding style is a hybrid
-        style) but none is found, or if a ``lj/*`` pair coefficient line
-        does not contain numeric epsilon and sigma values.
+    :raises ValueError: If a ``lj/*`` pair coefficient line does not
+        contain numeric epsilon and sigma values (expected at
+        ``parts[3]`` and ``parts[4]``).
     """
     coeffs = {
         "pair": {},
@@ -286,8 +291,12 @@ def parse_coeffs(parameter_path, styles):
             if keyword == "pair":
                 i, j = parts[1], parts[2]
                 if "*" in i or "*" in j:
-                    print("WARNING: Found wildcard coefficient."
-                          " These should be added mannually")
+                    msg = "WARNING: Found wildcard coefficient.\n"
+                    msg += " These should be added mannually"
+                    if logger is None:
+                        print(msg)
+                    else:
+                        logger.info(msg)
                     continue
                 i, j = int(i), int(j)
                 i, j = min(i, j), max(i, j)
@@ -344,8 +353,9 @@ def write_coeff_line(coeff, coeff_type, is_hybrid):
 
     If ``is_hybrid`` is True, the sub-style name is reinserted into the
     coefficient line's tokens at the position LAMMPS expects it (after
-    the two type indices for pair coefficients, or after the single type
-    index for bond/angle/dihedral/improper coefficients).
+    the command keyword and the two type indices for pair coefficients,
+    or after the keyword and the single type index for
+    bond/angle/dihedral/improper coefficients).
 
     :param coeff: A ``(substyle, parts)`` tuple as stored in a
         coefficients dictionary (e.g. one entry from the dict returned by
@@ -450,8 +460,9 @@ def write_parameter_file(styles, coeffs, extra_coeff_lines=None, outfile=None):
         at the top of the file before the parsed coefficients, if any.
     :type extra_coeff_lines: list of str, optional
     :param outfile: Path to the file to create/overwrite with the
-        formatted coefficient lines.
-    :type outfile: str, optional
+        formatted coefficient lines. Required in practice, since the
+        file is opened unconditionally.
+    :type outfile: str
 
     :returns: None. The formatted coefficients are written to ``outfile``.
     :rtype: None
@@ -468,7 +479,7 @@ def write_parameter_file(styles, coeffs, extra_coeff_lines=None, outfile=None):
             f.write("\n")
 
 
-def parse_ff(style_file, params_file):
+def parse_ff(style_file, params_file, logger=None):
     """
     Parse one LAMMPS force-field style/parameter file pair.
 
@@ -483,6 +494,9 @@ def parse_ff(style_file, params_file):
     :param params_file: Path to the LAMMPS parameter file to parse (e.g.
         a ``*.in.settings`` file).
     :type params_file: str
+    :param logger: Optional logger. The stacking/mass-comparison message
+        is sent to ``logger.info`` if provided, otherwise printed.
+    :type logger: logging.Logger, optional
 
     :returns:
         A tuple ``(styles, coeffs)`` containing the parsed style
@@ -492,7 +506,7 @@ def parse_ff(style_file, params_file):
     """
 
     styles = parse_styles(style_file)
-    coeffs = parse_coeffs(params_file, styles)
+    coeffs = parse_coeffs(params_file, styles, logger=logger)
 
     return styles, coeffs
 
@@ -500,15 +514,18 @@ def parse_ff(style_file, params_file):
 def merge_styles(styles, new_styles):
     """
     Merge force-field style dictionaries by appending new styles
-    to the list of styles and retaining hybrid if its defined.
+    to the list of styles and retaining hybrid if it is defined.
 
     For each style category present in ``new_styles``, unique styles
     (compared token-wise) are appended to the corresponding category's
     style list in ``styles``. Categories present only in ``new_styles``
-    are added as-is. A category's ``hybrid`` designation is taken from
-    ``new_styles`` if the merged entry doesn't already have one; if the
-    merged entry has no hybrid designation but ends up with any styles at
-    all, it defaults to ``"hybrid/overlay"``.
+    are added as-is. For categories present in both, the ``hybrid``
+    designation is taken from ``new_styles`` if the merged entry doesn't
+    already have one. If the merged entry's ``hybrid`` is still False
+    and ``new_styles`` declares any styles for that category (even if
+    they were all duplicates), it is set to ``"hybrid/overlay"``, so a
+    category may temporarily be flagged hybrid with only one style (see
+    :func:`reduce_styles`, which resets this).
 
     :param styles: Base style dictionary to merge into, in the format
         produced by a style-parsing function: keyed by category (e.g.
@@ -845,13 +862,15 @@ def reduce_styles(styles, coeffs, extra_coeffs):
     coefficient, mutating ``styles`` in place.
 
     For each style category, the set of substyle names actually used is
-    collected from ``coeffs`` (plus the first token of each entry in
-    ``extra_coeffs``, if provided, which overrides the used-style list
-    for every category rather than adding to it). Any declared style in
-    ``styles`` whose leading token is not in this used set is dropped.
-    After filtering, a category's ``hybrid`` flag is reset to False if
-    fewer than two styles remain, or set to ``"hybrid/overlay"`` if two
-    or more styles remain but ``hybrid`` was previously False.
+    collected from ``coeffs``, plus the first token of each entry in
+    ``extra_coeffs`` if provided. The ``extra_coeffs`` tokens are
+    added to the used set for EVERY category, in addition to (not instead
+    of) those found in ``coeffs``. Any declared style in ``styles``
+    whose leading token is not in the used set is dropped. After
+    filtering, a category's ``hybrid`` flag is reset to False if fewer
+    than two styles remain, or set to ``"hybrid/overlay"`` if two or more
+    styles remain but ``hybrid`` was previously False. ``coeffs`` must
+    contain an entry for every category in ``styles``.
 
     :param styles: Style dictionary keyed by category (e.g. ``"pair"``,
         ``"bond"``), each mapping to a dict with ``"styles"`` (list of
@@ -867,6 +886,12 @@ def reduce_styles(styles, coeffs, extra_coeffs):
         (e.g. manually-added lines); if provided, the first token of each
         line is used, for every style category, as the used-style list
         instead of styles derived from ``coeffs``.
+    :type extra_coeffs: list of str, optional
+    :param extra_coeffs: Optional list of raw extra lines (e.g. extra
+        pair styles); the first token of each line is treated as an
+        in-use style name. This only prevents matching styles from being
+        removed; it does not add styles that are not already in
+        ``styles``.
     :type extra_coeffs: list of str, optional
 
     :returns: A tuple ``(styles, coeffs)`` -- the same objects passed in,
@@ -916,12 +941,14 @@ def reduce_data_file(datafile,
     Rewrite a LAMMPS .data file using reduced type mappings.
 
     The following are modified:
-        - header type counts
-        - Masses
+        - header type counts (from ``reduced_counts``)
+        - Masses (replaced entirely by ``masses``)
         - atom/bond/angle/dihedral/improper type IDs
         - Pair Coeffs are removed
 
-    Everything else is preserved as written.
+    Atoms, Bonds, Angles, Dihedrals, and Impropers lines are rewritten
+    with normalized whitespace and any trailing comments removed. All
+    other content is preserved as written.
 
     :param datafile: Path to the input LAMMPS data file.
     :type datafile: str
@@ -939,6 +966,15 @@ def reduce_data_file(datafile,
     :param outfile: Path to write the rewritten data file to. Defaults to
         ``f"{datafile}.reduced"`` if not provided.
     :type outfile: str, optional
+    :param reduced_counts: Mapping of header keys (e.g. ``"atom types"``,
+        ``"bond types"``) to their new counts, substituted into the
+        rewritten file's header lines. Required in practice; passing None
+        raises a TypeError.
+    :type reduced_counts: dict
+
+    :raises ValueError: If ``atom_style`` is not "full", "charge", or
+        "atomic", if a type ID cannot be parsed, or if a type ID in the
+        data file has no entry in ``type_mapping``.
     :param reduced_counts: Mapping of header keys (e.g. ``"atom types"``,
         ``"bond types"``) to their new counts, substituted into the
         rewritten file's header lines.
@@ -1210,7 +1246,8 @@ def forcefield_merger(style_files,
                       override_cross_ps=None,
                       outparams=None,
                       outstyle=None,
-                      reduce=True):
+                      reduce=True,
+                      logger=None):
     """
     Parse, merge, and type-reduce one or more LAMMPS forcefields, then
     optionally compute cross interactions and write the merged result to
@@ -1218,23 +1255,25 @@ def forcefield_merger(style_files,
 
     Style and parameter files are grouped into one or more "forcefield
     groups" (one group per entry in ``style_files``/``params_files``,
-    after normalization); each group's styles are parsed and merged
-    together with :func:`parse_ff`/:func:`merge_styles`/
+    after normalization); each group's styles and coefficients are parsed
+    and merged with :func:`parse_ff`/:func:`merge_styles`/
     :func:`merge_coeffs`. If ``data_files`` is given, the atom types
     actually used by each group's data files are determined via
     :func:`read_used_types` and used to reduce that group's types to a
-    contiguous range with :func:`reduce_types`. If any groups' data-file
-    masses differ, or if ``data_files`` is not given, ``stack_ff`` is
-    effectively forced to True and each group's types are kept distinct
-    by offsetting them; otherwise (matching masses, ``stack_ff=False``)
-    every group is reduced against the shared union of used types so
-    matching types are combined rather than offset. Data files
-    corresponding to each group are rewritten with the final type
-    mapping via :func:`reduce_data_file`. Unused styles are then dropped
-    via :func:`reduce_styles`, cross interactions are computed via
-    :func:`compute_cross_interactions` if both ``mixing_rule`` and
-    ``cross_pairstyle`` are given, and the merged coefficients/styles are
-    optionally written to ``outparams``/``outstyle``.
+    contiguous range with :func:`reduce_types`. If the groups' data-file
+    masses differ, ``stack_ff`` is forced to True and each group's types
+    are kept distinct by offsetting them. If the masses match and
+    ``stack_ff=False``, every group is reduced against the shared union
+    of used types, so matching types are combined rather than offset. If
+    any group has no data files, that group is not reduced and, with
+    ``stack_ff=False``, no groups are offset (types are assumed to
+    already be consistent). Data files for each group are rewritten with
+    the final type mapping via :func:`reduce_data_file`. Unused styles are
+    then dropped via :func:`reduce_styles`, cross interactions are
+    computed via :func:`compute_cross_interactions` if both
+    ``mixing_rule`` and ``cross_pairstyle`` are given, and the merged
+    coefficients/styles are optionally written to
+    ``outparams``/``outstyle``.
 
     :param style_files: Style file path(s), one per forcefield group, or
         a single string to use for every group (see
@@ -1252,20 +1291,23 @@ def forcefield_merger(style_files,
         associated data files (which are left unreduced and not
         rewritten).
     :type data_files: str, tuple, list, or None, optional
-    :param atom_style: LAMMPS atom style used when reading data files and
-        rewriting them.
+    :param atom_style: LAMMPS atom style used when rewriting data files
+        with :func:`reduce_data_file`. (Note: it is currently not passed
+        to :func:`read_used_types`, which always assumes "full".)
     :type atom_style: str, optional
-    :param extra_pair_styles: Extra coefficient lines (e.g. manually
-        specified pair styles) whose leading tokens are treated as
-        additional in-use styles by :func:`reduce_styles`.
+    :param extra_pair_styles: Extra lines (e.g. manually specified pair
+        styles) whose leading tokens are treated as in-use styles by
+        :func:`reduce_styles`, so matching declared styles are not
+        dropped. They are not added to the style declarations by this
+        function.
     :type extra_pair_styles: list of str, optional
     :param extra_coeff_lines: Additional raw coefficient lines written
         verbatim at the top of ``outparams``, if given.
     :type extra_coeff_lines: list of str, optional
     :param stack_ff: Whether to keep each forcefield group's types
         distinct (offsetting them) rather than combining matching types
-        across groups. May be overridden to True automatically if
-        groups' masses differ or no data files are given.
+        across groups. Overridden to True automatically if the groups'
+        masses differ.
     :type stack_ff: bool, optional
     :param mixing_rule: Mixing rule ("arithmetic" or "geometric") used to
         compute missing cross pair interactions, if given together with
@@ -1280,19 +1322,27 @@ def forcefield_merger(style_files,
         the same substyle.
     :type override_cross_ps: bool, optional
     :param outparams: Path to write the final merged coefficients to, via
-        :func:`write_all_coeffs`. If not given, no parameter file is
+        :func:`write_parameter_file`. If not given, no parameter file is
         written.
     :type outparams: str, optional
     :param outstyle: Path to write the final merged style declarations
         to, via :func:`write_style_file`. If not given, no style file is
         written.
     :type outstyle: str, optional
+    :param reduce: If True, pair types are reduced to only those used by
+        atoms in the data files. If not True, all atom types declared in
+        each data file's Masses section are kept (bond, angle, dihedral,
+        and improper types are still reduced to those in use).
+    :type reduce: bool, optional
+    :param logger: Optional logger. The stacking/mass-comparison message
+        is sent to ``logger.info`` if provided, otherwise printed.
+    :type logger: logging.Logger, optional
 
     :returns:
         A tuple ``(final_styles, final_coeffs, reduced_names)``: the
         merged and reduced style dictionary, the merged and reduced
         coefficients dictionary, and the list of paths to the rewritten
-        (``.reduced``) data files.
+        data files, named ``<data_file>.<group index>.reduced``.
     :rtype: tuple
 
     :raises TypeError: If ``style_files`` or an entry in
@@ -1356,15 +1406,20 @@ def forcefield_merger(style_files,
 
     # Check if masses give the same dictionaries
     if all(mass == masses[0] for mass in masses):
-        print("All mass dictionaries are the same")
+        msg = "All mass dictionaries are the same"
         if stack_ff is True:
             print("Offsetting types for consecutive forcefields")
     elif stack_ff is False:
-        print("Mass dictionaries differ, but stack_ff=False passed...")
-        print("Reverting to stack_ff=True.")
+        msg = "Mass dictionaries differ, but stack_ff=False passed...\n"
+        msg += "Reverting to stack_ff=True."
         stack_ff = True
     else:
-        print("Mass dictionaries differ, stacking forcefields")
+        msg = "Mass dictionaries differ, stacking forcefields"
+
+    if logger is None:
+        print(msg)
+    else:
+        logger.info(msg)
 
     # Need to modify used_types to include ALL used types so reduction
     # is consistent across files
