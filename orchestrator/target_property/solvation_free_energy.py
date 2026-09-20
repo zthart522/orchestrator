@@ -286,37 +286,6 @@ class SolvationFreeEnergy(TargetProperty):
         else:
             self.restart = False
 
-        # Save finished_jobs as the union of unique jobs found
-        # in the analysis .json file and the restart file
-        if len(self.analysis_dirs) >= 1:
-            manifest_path = os.path.join(self.analysis_dirs[-1],
-                                         "finished_jobs.json")
-            try:
-                with open(manifest_path) as f:
-                    json_finished_jobs = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError) as e:
-                self.logger.warning(
-                    'analysis_dir set but finished_jobs.json missing or '
-                    f'unreadable at {manifest_path} ({e}); '
-                    'using checkpoint value only')
-                json_finished_jobs = {}
-
-            merged = {}
-            for leg in set(self.finished_jobs) | set(json_finished_jobs):
-                checkpoint_jobs = self.finished_jobs.get(leg, [])
-                manifest_jobs = json_finished_jobs.get(leg, [])
-
-                seen_ids = set()
-                unique_jobs = []
-                for job in checkpoint_jobs + manifest_jobs:
-                    if job['job_id'] in seen_ids:
-                        continue
-                    seen_ids.add(job['job_id'])
-                    unique_jobs.append(job)
-                merged[leg] = unique_jobs
-
-            self.finished_jobs = merged
-
     def calculate_property(
         self,
         path_type: str,
@@ -509,8 +478,8 @@ class SolvationFreeEnergy(TargetProperty):
             f'Starting TI w/ initial lambda array: {lambda_values}')
         self.logger.info(f'Using lambda_diff: {lambda_diff}')
 
-        # Make analysis directory if one does not exist from failed run
-        if not self.analysis_dirs:
+        # Make analysis directory if one does not exist from failed
+        if len(self.analysis_dirs) == self.replicate:
             analysis_dir = scheduler.make_path(self.__class__.__name__,
                                                f'{path_type}/Analysis')
             self.analysis_dirs.append(analysis_dir)
@@ -921,7 +890,6 @@ class SolvationFreeEnergy(TargetProperty):
                 self.forcefield_path = None
                 self.system_mode = None
                 self.init_structure = None
-                self.analysis_dirs[-1] = None
                 self.min_structure = None
                 self.equil_structure = None
                 self.uncharged_structure = None
