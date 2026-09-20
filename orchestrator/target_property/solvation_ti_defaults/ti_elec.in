@@ -59,12 +59,13 @@ include         system_packed.in.charges
 group           solute   molecule 1
 group           solvent  subtract all solute
 
+fix          q0 all store/state 0 q
+variable     qscaled atom f_q0*v_lambda_c
+set          group solute charge v_qscaled
+
 ##############################################
 ###         Charge Modification          ###
 ##############################################
-
-# Scale charges
-{{ charge_modification_block }}
 
 # --- Compute dU/dL using central difference---
 {{ delta_charge_block }}

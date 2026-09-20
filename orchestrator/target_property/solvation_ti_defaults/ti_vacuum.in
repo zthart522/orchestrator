@@ -52,20 +52,22 @@ dihedral_style  {{ dihedral_style }}
 improper_style  {{ improper_style }}
 {% if special_bonds != 'none' %}special_bonds   {{ special_bonds }} {% endif %}
 
+include         system_packed.in.charges
 include         system_packed.in.settings
 
 ##############################################
 ###                Groups                ###
 ##############################################
 
-group           solute   molecule 1
+group           solute   molecule {{ solute_molecule_id }}
+
+fix          q0 all store/state 0 q
+variable     qscaled atom f_q0*v_lambda_c
+set          group solute charge v_qscaled
 
 ##############################################
 ###         Charge Modification          ###
 ##############################################
-
-# Scale charges
-{{ charge_modification_block }}
 
 # --- Compute dU/dL using central difference---
 {{ delta_charge_block }}
