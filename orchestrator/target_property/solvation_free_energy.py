@@ -1353,7 +1353,8 @@ class SolvationFreeEnergy(TargetProperty):
                 override_cross_ps=override_cross,
                 stack_ff=False,
                 outparams=f"{self.forcefield_path}/solvent.in.settings",
-                outstyle=f"{self.forcefield_path}/solvent.in.init")
+                outstyle=f"{self.forcefield_path}/solvent.in.init",
+                logger=self.logger)
 
             self.logger.info('Reading prepared LAMMPs .data file')
             construction, topology, box = read_lammps_data(
@@ -1387,7 +1388,8 @@ class SolvationFreeEnergy(TargetProperty):
                 target_mol_id=solute_id,
                 filepath=f'{system_dir}/system_packed.data',
                 box=box,
-                atom_style=atom_style
+                atom_style=atom_style,
+                logger=self.logger
             )
         all_types = list(all_charges.keys())
         solute_types = list(solute_charges.keys())
