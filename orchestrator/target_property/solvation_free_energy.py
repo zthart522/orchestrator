@@ -316,14 +316,125 @@ class SolvationFreeEnergy(TargetProperty):
 
         :param path_type: path to perform solvation free energy calculations
         :type path_type: str
-        :param sim_params: simulation specific parameters
+
+        :param sim_params: Simulation parameters controlling the LAMMPS
+            setup, soft-core potential, thermostat/barostat, and run lengths.
+            Values not specified are taken from the class's default
+            simulation parameters. Values to be specified are listed below:
+
+            - ``units``: LAMMPS unit style (e.g. "real")
+            - ``atom_style``: LAMMPS atom style (e.g. "full")
+            - ``soft_args``: dictionary of soft-core parameters used to
+                decouple the solute from the system:
+                ``softcore_n``: exponent n of the soft-core scaling function
+                ``alpha_vdw``: soft-core alpha parameter for van der Waals
+                    interactions
+                ``alpha_elec``: soft-core alpha parameter for electrostatic
+                    interactions
+            - ``pair_modify``: arguments passed to the LAMMPS ``pair_modify``
+                command, or "none" to omit the command
+            - ``kspace_style``: arguments passed to the LAMMPS ``kspace_style``
+                command (e.g. "pppm 1e-5"), or "none" for no long-range solver
+            - ``kspace_modify``: arguments passed to the LAMMPS
+                ``kspace_modify`` command, or "none" to omit the command
+            - ``special_bonds``: arguments passed to the LAMMPS
+                ``special_bonds`` command (e.g. "lj/coul 0.0 0.0 1.0")
+            - ``extra_pair_styles``: a LIST of additional pair styles (with
+                their global arguments) to be added to the hybrid pair style,
+                e.g. ["coul/wolf/kk 0.2 11.0"]
+            - ``extra_coeff_lines``: a LIST of complete ``pair_coeff`` lines
+                for the additional pair styles, written out verbatim, e.g.
+                ["pair_coeff * * coul/wolf/kk"]. This should only really be
+                used for * * interactions (atom types may change when
+                preparing the forcefield and data files for simulation).
+            - ``override_cross_pairstyle``: dictates pair_style selection for
+                undefined cross-terms when types i and j use the same
+                pair_style for self-interactions. If True, the pair style
+                given in ``cross_pairstyle`` is used instead of the shared
+                pairstyle. If False, undefined i-j interactions ALWAYS use
+                ``cross_pairstyle``.
+            - ``cross_pairstyle``: pair style (with arguments) applied to
+                cross interactions when ``override_cross_pairstyle`` is True
+                (e.g. "lj/cut/kk 11.0")
+            - ``mixing_rule``: mixing rule for unspecified cross-term
+                Lennard-Jones parameters; options are "arithmetic" or
+                "geometric"
+            - ``temp``: simulation temperature
+            - ``press``: simulation pressure
+            - ``temp_damp``: thermostat damping parameter
+            - ``press_damp``: barostat damping parameter
+            - ``timestep``: simulation timestep
+            - ``equil_steps``: number of steps used to equilibrate the system
+                before the TI runs begin
+            - ``ti_steps``: number of steps run for each λ simulation,
+            regardless of <leg>
         :type sim_params: dict
-        :param system_params: parameters required for initial system
-            preparation
+
+        :param system_params: System/solvation parameters to validate,
+            including packing settings and solute/solvent definitions (or,
+            in "prepared" system mode, paths to pre-built LAMMPS input
+            files). Values not specified are taken from the class's default
+            system parameters. Values to be sepecified are listed below:
+
+            - ``system_mode``: options are "pack" and "prepared"
+                If a system requires packing, choose "pack". If an already
+                prepared system should be used, choose "prepared". This
+                selection changes the required inputs for the remainder of the
+                system_params.
+
+            If system_mode="pack":
+            - ``pack_tol``: allowable distance between neighboring atom
+                centers during packing (in Angstroms)
+            - ``pack_boxlen``: sidelength of box for initial packing
+            - ``solute``: dictionary containing the following fields:
+                ``ff_mode``: "radonpy"/"moltemplate"
+                ``forcefield``: path to single-molecule .lt file (in
+                    "moltemplate" mode) or path to RadonPy forcefield
+                    directory containing lammps_forcefield_style.lmp and
+                    lammps_forcefield_paramlist.lmp files ("radonpy" mode)
+                ``class``: name of class in .lt file to use ("moltemplate"
+                    mode) or any string value ("radonpy" mode)
+                ``structure``: path to single-molecule .pdb file ("moltemplate"
+                mode), or single-molecule .data file ("radonpy" mode)
+                ``number``: the number of this molecule of solute to pack. Even
+                    when this value is greater than 1, only a single-molecule
+                    is decoupled from the system.
+            - ``solvent``: a LIST of dictionaries, with each entry having the
+                same format as the ``solute`` (see above). If separate
+                molecules use the same forcefield, their ``forcefield`` entry
+                should refer to the same path (although the string does not
+                necessarily have to be identical)
+
+            If system_mode="prepared"
+            - ```data_file``: path to LAMMPs .data file of prepared system
+            - ``style_file``: path to file containing pair_style, bond_style,
+                etc.
+                This file will be parsed for style type (pair, bond, angle,
+                dihedral, and improper), but it is not necessary to have them
+                all defined.
+            - ``param_file``: path to file contraining pair_coeff, bond_coeff,
+                etc. These parameters can be specified with or without
+                substyles (i.e. including substyles for hybrid styles). This
+                can be the same file as the ``style_file``, but should be
+                passed for both fields.
+            - ``solute_molecule_id``: the molecule ID in the LAMMPs .data file
+                (full or molecular atom_styles) to be decoupled (i.e. solute)
         :type system_params: dict
+
         :param ti_params: parameters required for thermodynamic integration
-            analysis
+            analysis. Fields to be specified are:
+            - ``free_energy``: "gibbs" (NVT λ-runs) or "helmholtz" (NPT λ-runs)
+            - ``lambda_values``: a list of lambda values including 0.0 and 1.0,
+                or an int for the number of equally spaced lambda values to be
+                run (i.e. lambda_values=3 gives [0.0, 0.50, 1.00])
+            - ``lambda_diff``: amount by which lambda is perturbed for finite
+                difference approximation of dU/dλ during equilibrium λ
+                    simulations
+            - ``equil_frac``: fraction of λ simulation to remove as
+                equilibration period from each λ simulation
         :type ti_params: dict
+
+
         :param executables: dictionary for paths to required executables. For
             system_mode = ``prepare``, no executables are required. For
             system_mode = ``pack``, packmol is required. If
@@ -331,22 +442,27 @@ class SolvationFreeEnergy(TargetProperty):
             moltemplate_cleanup are required.
             Possible keys: ``packmol``, ``moltemp``, ``moltemp_cleanup``
         :type executables: dict
+
         :param random_seed_use: option to use random seed in the simulation
         :type random_seed_use: boolean
-        :param max_submit: maximum number of jobs to submit to queue
+
+        :param max_submit: maximum number of jobs to submit to queue at a
+            single time, to avoid HPC limits
         :type max_submit: str
+
         :param user: HPC user to check for current number of submitted jobs
         :type user: str
+
         :param scheduler: Orchestrator scheduler class for submitting jobs
         :type scheduler: Scheduler
         :param storage: Orchestrator storage class to create datasets
             CURRENTLY NOT USED!!
         :type storage: Storage
 
-        :returns: a dictionary with solvation free energy, sampling error,
-            calc_ids as dictionary of lists with keys corresponding to
-            simulation types (``min``, ``equil``, ``ti_elec``, ``ti_vdw``,
-            and ``ti_vacuum``), and success
+        :returns: a dictionary with solvation free energy estimate, propogated
+        error estimate, and calc_ids as dictionary of lists with keys
+            corresponding to simulation types (``min``, ``equil``, ``ti_elec``,
+            ``ti_vdw``, and ``ti_vacuum``), and success
         :rtype: dict
         """
 
@@ -1965,11 +2081,8 @@ class SolvationFreeEnergy(TargetProperty):
         :param sim_params: Simulation parameters to validate. Values not
             specified are taken from the class's default simulation parameters.
         :type sim_params: dict
-        :param system_params: System/solvation parameters to validate,
-            including packing settings and solute/solvent definitions (or,
-            in "prepared" system mode, paths to pre-built LAMMPS input
-            files). Values not specified are taken from the class's default
-            system parameters.
+        :param system_params: System parameters to validate. ``pack_tol`` and
+            ``pack_boxlen`` both have default values, if not specified
         :type system_params: dict
         :param ti_params: Free-energy and thermodynamic-integration parameters
             to validate, including ``free_energy``, ``equil_frac``,
