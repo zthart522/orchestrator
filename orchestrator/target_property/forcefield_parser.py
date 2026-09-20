@@ -289,7 +289,8 @@ def parse_coeffs(parameter_path, styles):
                     print("WARNING: Found wildcard coefficient."
                           " These should be added mannually")
                     continue
-                i, j = int(min(i, j)), int(max(i, j))
+                i, j = int(i), int(j)
+                i, j = min(i, j), max(i, j)
                 parts[1], parts[2] = str(i), str(j)
             elif keyword in ("bond", "angle", "dihedral", "improper"):
                 type_index = int(parts[1])
@@ -610,10 +611,14 @@ def read_used_types(datafile, atom_style='full'):
     file, and read the per-type masses.
 
     The data file is scanned section by section (Masses, Atoms, Bonds,
-    Angles, Dihedrals, Impropers); lines are stripped of comments (text
-    after ``#``), and non-data lines (blank, or not starting with a
-    digit) are skipped. The atom type column used to determine used pair
-    types depends on ``atom_style``.
+    Angles, Dihedrals, Impropers). The header counts (e.g. "N atoms",
+    "N bonds") are read first so that each section reads exactly the
+    right number of data lines; once that many lines have been consumed,
+    the section is closed, so any following section (e.g. Velocities,
+    Pair Coeffs) can never be misread as more data for the previous
+    section. Lines are stripped of comments (text after ``#``), and
+    blank lines are skipped. The atom type column used to determine used
+    pair types depends on ``atom_style``.
 
     :param datafile: Path to the LAMMPS data file to scan.
     :type datafile: str
@@ -643,7 +648,17 @@ def read_used_types(datafile, atom_style='full'):
     else:
         raise ValueError(f"Unsupported atom style: {atom_style}")
 
-    section = None
+    # Section header -> (internal name, header-count keyword)
+    known_sections = {
+        "Masses": ("mass", None),
+        "Atoms": ("atom", "atoms"),
+        "Bonds": ("bond", "bonds"),
+        "Angles": ("angle", "angles"),
+        "Dihedrals": ("dihedral", "dihedrals"),
+        "Impropers": ("improper", "impropers"),
+    }
+    count_keywords = {"atoms", "bonds", "angles", "dihedrals", "impropers"}
+
     types_used = {
         "pair": set(),
         "bond": set(),
@@ -653,6 +668,25 @@ def read_used_types(datafile, atom_style='full'):
     }
     masses = {}
 
+    # --- First pass: read header counts (e.g. "1000 atoms", "50 bonds") ---
+    counts = {}
+    with open(datafile, 'r') as f:
+        for line in f:
+            clean = line.split('#', 1)[0].strip()
+            if not clean:
+                continue
+            # Header-count section ends once we hit the first real section
+            if clean in known_sections:
+                break
+            parts = clean.split()
+            if len(parts) == 2 and parts[0].isdigit(
+            ) and parts[1] in count_keywords:
+                counts[parts[1]] = int(parts[0])
+
+    # --- Second pass: read section data, respecting counts ---
+    section = None  # internal section name ("atom", "bond", ...), or None
+    remaining = 0  # how many data lines are still expected in this section
+
     with open(datafile, 'r') as f:
         for line in f:
             clean = line.split('#', 1)[0].strip()
@@ -660,55 +694,48 @@ def read_used_types(datafile, atom_style='full'):
             if not clean:
                 continue
 
-            # Identify sections
-            if clean == "Masses":
-                section = "mass"
+            # Section header line? (always resets state, even mid-count)
+            if clean in known_sections:
+                section, count_key = known_sections[clean]
+                remaining = counts.get(
+                    count_key, float('inf')) if count_key else float('inf')
                 continue
-            if clean == "Atoms":
-                section = "atom"
-                continue
-            elif clean == "Bonds":
-                section = "bond"
-                continue
-            elif clean == "Angles":
-                section = "angle"
-                continue
-            elif clean == "Dihedrals":
-                section = "dihedral"
-                continue
-            elif clean == "Impropers":
-                section = "improper"
+
+            # If we've already consumed all expected lines for this
+            # section, stop treating further lines as its data (this is
+            # what protects Atoms from bleeding into a following
+            # Velocities section, etc.)
+            if section is not None and remaining <= 0:
+                section = None
+
+            if section is None:
                 continue
 
             parts = clean.split()
-
-            if parts and section == "mass":
-                masses[int(parts[0])] = float(parts[1])
 
             # Skip non-data lines
             if not parts or not parts[0].isdigit():
                 continue
 
-            # Extract type
-            if section == "atom":
+            if section == "mass":
+                masses[int(parts[0])] = float(parts[1])
+            elif section == "atom":
                 atom_type = int(parts[atom_type_column])
                 types_used["pair"].add(atom_type)
             elif section == "bond":
-                bond_type = int(parts[1])
-                types_used["bond"].add(bond_type)
+                types_used["bond"].add(int(parts[1]))
             elif section == "angle":
-                angle_type = int(parts[1])
-                types_used["angle"].add(angle_type)
+                types_used["angle"].add(int(parts[1]))
             elif section == "dihedral":
-                dihedral_type = int(parts[1])
-                types_used["dihedral"].add(dihedral_type)
+                types_used["dihedral"].add(int(parts[1]))
             elif section == "improper":
-                improper_type = int(parts[1])
-                types_used["improper"].add(improper_type)
+                types_used["improper"].add(int(parts[1]))
 
-        # Convert sets to sorted lists
-        for key in types_used:
-            types_used[key] = sorted(types_used[key])
+            remaining -= 1
+
+    # Convert sets to sorted lists
+    for key in types_used:
+        types_used[key] = sorted(types_used[key])
 
     return types_used, masses
 
@@ -1177,12 +1204,13 @@ def forcefield_merger(style_files,
                       atom_style='full',
                       extra_pair_styles=None,
                       extra_coeff_lines=None,
-                      stack_ff=False,
+                      stack_ff=True,
                       mixing_rule=None,
                       cross_pairstyle=None,
                       override_cross_ps=None,
                       outparams=None,
-                      outstyle=None):
+                      outstyle=None,
+                      reduce=True):
     """
     Parse, merge, and type-reduce one or more LAMMPS forcefields, then
     optionally compute cross interactions and write the merged result to
@@ -1318,6 +1346,8 @@ def forcefield_merger(style_files,
         group_masses = {}
         for data_file in data_group:
             file_used_types, file_masses = read_used_types(data_file)
+            if reduce is not True:
+                file_used_types["pair"] = list(file_masses.keys())
             group_used_types = merge_used_types(group_used_types,
                                                 file_used_types)
             group_masses.update(file_masses)
