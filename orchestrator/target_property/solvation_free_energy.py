@@ -578,17 +578,21 @@ class SolvationFreeEnergy(TargetProperty):
 
         if self.progress_flag == 'equil_done':
 
+            # Get legs
+            legs = ('elec', 'vdw', 'vacuum') if charged_solute else ('vdw', )
+
             # Check if lambdas_to_run have already been set
             is_empty = True
-            for leg in ('elec', 'vdw', 'vacuum'):
+            for leg in legs:
                 if len(self.lambdas_to_run[f'ti_{leg}']) != 0:
                     is_empty = False
                     break
 
             # If not, set them here for all legs
             if is_empty is True:
-                for leg in ('elec', 'vdw', 'vacuum'):
+                for leg in legs:
                     self.lambdas_to_run[f'ti_{leg}'] = list(lambda_values)
+                    self.checkpoint_property()
 
         self.logger.info(
             f'Starting TI w/ initial lambda array: {lambda_values}')
@@ -697,9 +701,13 @@ class SolvationFreeEnergy(TargetProperty):
 
         for leg in ('elec', 'vdw', 'vacuum'):
             results_file = f'{analysis_dir}/results_{leg}.dat'
-            lams, lens, dudl, dudl_std, dudl_err = \
-                self._read_results_file(results_file)
-            dg_leg, stat_err = self.compute_integral(lams, dudl, dudl_err)
+            if os.path.isfile(results_file):
+                lams, lens, dudl, dudl_std, dudl_err = \
+                    self._read_results_file(results_file)
+                dg_leg, stat_err = self.compute_integral(lams, dudl, dudl_err)
+            else:
+                dg_leg = 0
+                stat_err = 0
 
             if leg in ("vdw", "elec"):
                 dg_total += dg_leg
@@ -949,11 +957,13 @@ class SolvationFreeEnergy(TargetProperty):
 
         if self.replicate is None:
             self.replicate = 0
+            self.checkpoint_property()
 
         if self.master_analysis_dir is None:
             self.master_analysis_dir = \
                 scheduler.make_path(self.__class__.__name__,
                                     f'{path_type}/MasterAnalysis')
+            self.checkpoint_property()
 
         while True:
 
@@ -979,20 +989,22 @@ class SolvationFreeEnergy(TargetProperty):
 
             # Combine analysis of all prior iterations
             if self.progress_flag == 'ti_done':
+
                 for leg in ('elec', 'vdw', 'vacuum'):
                     result_file = f'{self.analysis_dirs[-1]}/results_{leg}.dat'
-                    lams, lens, dudl, dudl_std, dudl_err = \
-                        self._read_results_file(result_file)
-                    dir = self.master_analysis_dir
-                    if self.replicate != 0:
-                        shutil.copy(
-                            f'{dir}/results_{leg}_{self.replicate - 1}.dat',
-                            f'{dir}/results_{leg}_{self.replicate}.dat')
-                    lams, lens, dudl, dudl_std, dudl_err = \
-                        self._write_results_file(
-                            lams, lens, dudl, dudl_std, dudl_err,
-                            f'{dir}/results_{leg}_{self.replicate}.dat'
-                        )
+                    if os.path.isfile(result_file):
+                        lams, lens, dudl, dudl_std, dudl_err = \
+                            self._read_results_file(result_file)
+                        dir = self.master_analysis_dir
+                        if self.replicate != 0:
+                            shutil.copy(
+                                f'{dir}/results_{leg}_{self.replicate-1}.dat',
+                                f'{dir}/results_{leg}_{self.replicate}.dat')
+                        lams, lens, dudl, dudl_std, dudl_err = \
+                            self._write_results_file(
+                                lams, lens, dudl, dudl_std, dudl_err,
+                                f'{dir}/results_{leg}_{self.replicate}.dat'
+                            )
                 self.progress_flag = 'iter_merged'
                 self.checkpoint_property()
 
@@ -1049,8 +1061,9 @@ class SolvationFreeEnergy(TargetProperty):
             # Copy last iteration of results_<leg>_<replicate>.dat files
             for leg in ('elec', 'vdw', 'vacuum'):
                 dir = self.master_analysis_dir
-                shutil.copy(f'{dir}/results_{leg}_{self.replicate}.dat',
-                            f'{dir}/results_{leg}.dat')
+                if os.path.isfile(f'{dir}/results_{leg}_{self.replicate}.dat'):
+                    shutil.copy(f'{dir}/results_{leg}_{self.replicate}.dat',
+                                f'{dir}/results_{leg}.dat')
 
             free_energy = ti_params.get("free_energy")
             (dg, stat) = self.analyze_leg_results(self.analysis_dirs[-1],
@@ -1548,7 +1561,7 @@ class SolvationFreeEnergy(TargetProperty):
                                                    moltemp_exe=mt_exe,
                                                    cleanup_exe=mt_clean_exe)
 
-            m['structure'] = os.path.realpath(datafile)
+            m['data_structure'] = os.path.realpath(datafile)
             m['base_name'] = f"mol{mt_count}"
             mt_count += 1
 
@@ -1594,6 +1607,8 @@ class SolvationFreeEnergy(TargetProperty):
             ff_mode = m.get('ff_mode')
             forcefield = m.get('forcefield')
             structure = m.get('structure')
+            if m.get('ff_mode').lower() == 'moltemplate':
+                structure = m.get('data_structure')
 
             matched_key = None
             for ff in unique_forcefields:
