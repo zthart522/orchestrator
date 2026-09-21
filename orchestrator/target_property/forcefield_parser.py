@@ -291,7 +291,7 @@ def parse_coeffs(parameter_path, styles, logger=None):
             if keyword == "pair":
                 i, j = parts[1], parts[2]
                 if "*" in i or "*" in j:
-                    msg = "WARNING: Found wildcard coefficient.\n"
+                    msg = "Warning: Found wildcard coefficient.\n"
                     msg += " These should be added mannually"
                     if logger is None:
                         print(msg)
@@ -1380,7 +1380,9 @@ def forcefield_merger(style_files,
     for style_file, params_group in zip(style_files, params_groups):
         ff_coeffs = {}
         for params_file in params_group:
-            new_styles, new_coeffs = parse_ff(style_file, params_file)
+            new_styles, new_coeffs = parse_ff(style_file,
+                                              params_file,
+                                              logger=logger)
             styles = merge_styles(styles, new_styles)
             ff_coeffs = merge_coeffs(ff_coeffs, new_coeffs)
         coeffs.append(ff_coeffs)

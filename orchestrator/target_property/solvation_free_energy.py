@@ -1671,7 +1671,8 @@ class SolvationFreeEnergy(TargetProperty):
             extra_coeff_lines=extra_coeff_lines,
             stack_ff=False,
             outparams=f"{self.forcefield_path}/combined.in.settings",
-            outstyle=f"{self.forcefield_path}/combined.in.init")
+            outstyle=f"{self.forcefield_path}/combined.in.init",
+            logger=self.logger)
 
     def _pack_solute_solvent_system(self, system_dir, molecule_list,
                                     reduced_names, system_params, atom_style,
