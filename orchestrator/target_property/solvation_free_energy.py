@@ -1066,7 +1066,7 @@ class SolvationFreeEnergy(TargetProperty):
                                 f'{dir}/results_{leg}.dat')
 
             free_energy = ti_params.get("free_energy")
-            (dg, stat) = self.analyze_leg_results(self.analysis_dirs[-1],
+            (dg, stat) = self.analyze_leg_results(self.master_analysis_dir,
                                                   "results_summary.dat",
                                                   free_energy)
             self.plot_dudl_vs_lambda(self.master_analysis_dir)
