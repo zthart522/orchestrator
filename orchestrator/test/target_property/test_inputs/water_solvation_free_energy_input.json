@@ -1,0 +1,136 @@
+{
+    "target_property": {
+        "target_property_type": "SolvationFreeEnergy",
+        "target_property_args": {
+            "simulator_type": "LAMMPS",
+            "simulator_path": "path/to/lammps/lmp",
+            "input_template": {
+                "min": "../../target_property/solvation_ti_defaults/min.in",
+                "equil": "../../target_property/solvation_ti_defaults/equil.in",
+                "ti_elec": "../../target_property/solvation_ti_defaults/ti_elec.in",
+                "ti_vdw": "../../target_property/solvation_ti_defaults/ti_vdw.in",
+                "ti_vacuum": "../../target_property/solvation_ti_defaults/ti_vacuum.in"
+            },
+            "job_details": {
+                "nodes":1,
+                "tasks":48,
+                "extra_args":{
+                    "preamble": "module purge\nmodule load gcc/15.1.0\nmodule load openmpi/5.0.8\nmodule load hdf5/1.10.11\n\nexport FI_PROVIDER=tcp\nexport OMP_NUM_THREADS=4"
+                },
+                "custom_preamble": "ibrun"
+            },
+            "ti_job_details":
+            {
+                "min":{
+                    "walltime": 5
+                },
+                "equil":{
+                    "walltime": 20
+                },
+                "ti_elec":{
+                    "walltime": 20
+                },
+                "ti_vdw":{
+                    "walltime": 20
+                },
+                "ti_vacuum":{
+                    "walltime": 20
+                }
+            }
+        },
+        "calculate_property_args": {
+            "path_type": "01_water",
+            "user": "zthart",
+            "max_submit": 4,
+            "random_seed_use": false,
+            "accelerator": null,
+            "executables":{
+                "packmol": "path/to/packmol",
+                "moltemp": "path/to/moltemplate.sh",
+                "moltemp_cleanup": "path/to/cleanup_moltemplate.sh"
+            },
+            "sim_params": {
+                "units": "real",
+                "atom_style": "full",
+                "soft_args": {
+                    "softcore_n": 1.0,
+                    "alpha_vdw": 0.5,
+                    "alpha_elec": 10
+                },
+                "pair_modify": "none",
+                "kspace_style": "none",
+                "kspace_modify": "none",
+                "special_bonds": "lj/coul 0.0 0.0 1.0",
+                "extra_pair_styles": ["coul/wolf/kk 0.2 11.0"],
+                "extra_coeff_lines": ["pair_coeff * * coul/wolf/kk"],
+                "override_cross_pairstyle": false,
+                "cross_pairstyle": "lj/cut 2.5",
+                "mixing_rule": "arithmetic",
+                "temp": 298.0,
+                "press": 1.0,
+                "temp_damp": 100.0,
+                "press_damp": 250.0,
+                "timestep": 0.5,
+                "equil_steps": 20000,
+                "ti_steps": 10000
+            },
+            "system_params": {
+                "system_mode": "pack",
+                "pack_tol": 1.5,
+                "pack_boxlen": 35.0,
+                "solute": {
+                    "class": "water",
+                    "ff_mode": "moltemplate",
+                    "forcefield": "./solvation_free_energy_files/water.lt",
+                    "structure": "./solvation_free_energy_files/water.pdb"
+                },
+                "solvent": [
+                    {
+                        "class": "water",
+                        "ff_mode": "RadonPy",
+                        "forcefield": "./solvation_free_energy_files/ff",
+                        "structure": "./solvation_free_energy_files/ff/lammps_data_water.lmp",
+                        "number": 333
+                    },
+                    {
+                        "class": "water",
+                        "ff_mode": "RadonPy",
+                        "forcefield": "./solvation_free_energy_files/ff",
+                        "structure": "./solvation_free_energy_files/ff/lammps_data_water.lmp",
+                        "number": 333
+                    },
+                    {
+                        "class": "water",
+                        "ff_mode": "moltemplate",
+                        "forcefield": "./solvation_free_energy_files/water.lt",
+                        "structure": "./solvation_free_energy_files/water.pdb",
+                        "number": 333
+                    }
+
+                ]
+            },
+            "ti_params": {
+                "free_energy": "gibbs",
+                "lambda_values": 4,
+                "lambda_diff": 0.002,
+                "equil_frac": 0.30
+            }
+        }
+    },
+    "scheduler": {
+        "scheduler_type": "SLURM",
+        "scheduler_args": {
+            "root_directory": "./01_sfe_root",
+            "queue": "skx-dev",
+            "account": "TG-CHM250015",
+            "wait_freq": 30
+        }
+    },
+    "storage": {
+        "storage_type": "LOCAL",
+        "storage_args": {
+            "database_path": "./solv_free_energy_storage",
+            "dataset_name": "solv_free_energy"
+        }
+    }
+}
